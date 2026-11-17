@@ -27,20 +27,20 @@ import (
 type Task struct {
 	ID           string `json:"id"`
 	ExpID        int64  `json:"exploration_id"`
-	Name         string `json:"name"` // 简短任务名/目标；空=回退 #id·描述
+	Name         string `json:"name"` // short task name/goal; empty = falls back to #id·description
 	Description  string `json:"description"`
 	Goal         string `json:"goal"`
 	CreatedAt    int64  `json:"created_at"`
-	CompletedAt  int64  `json:"completed_at,omitempty"` // 进入终态的 unix 秒;0=未完成
+	CompletedAt  int64  `json:"completed_at,omitempty"` // unix seconds when a terminal state was entered; 0 = not finished
 	Paused       bool   `json:"paused"`
-	ParentRef    string `json:"parent_ref,omitempty"`     // 父任务 id(编排 spawn 记录)
-	LLMProfileID *int64 `json:"llm_profile_id,omitempty"` // 指定运行本任务 planner/worker 的 LLM 配置;nil=用全局激活配置
-	Status       string `json:"status"`                   // persisted lifecycle status (done/failed/timeout 为终态；空/其它则由运行态推导)
-	// 任务级超时(见 docs/任务级超时与收尾设计.md)。DeadlineAt/FirstRunAt 为 unix 秒,0=未设/未运行。
+	ParentRef    string `json:"parent_ref,omitempty"`     // parent task id (recorded by orchestration spawn)
+	LLMProfileID *int64 `json:"llm_profile_id,omitempty"` // LLM profile for this task's planner/worker; nil = use the globally active profile
+	Status       string `json:"status"`                   // persisted lifecycle status (done/failed/timeout are terminal; empty/other is derived from the runtime state)
+	// Task-level timeout (see the task-timeout & settlement design doc). DeadlineAt/FirstRunAt are unix seconds, 0 = unset/not run.
 	TimeoutSeconds int                    `json:"timeout_seconds"`
 	FirstRunAt     int64                  `json:"first_run_at,omitempty"`
 	DeadlineAt     int64                  `json:"deadline_at,omitempty"`
-	Egress         string                 `json:"egress,omitempty"` // 出口代理:''=跟随全局|'direct'=直连|'proxy'=走全局代理
+	Egress         string                 `json:"egress,omitempty"` // egress proxy: ''=follow global | 'direct'=direct | 'proxy'=global proxy
 	Store          *pgdb.ExplorationStore `json:"-"`
 	Guard          *guard.Guard           `json:"-"`
 	notify         chan struct{}
@@ -65,9 +65,9 @@ type Manager struct {
 	mu        sync.RWMutex
 	tasks     map[string]*Task
 	active    string
-	trafficOn bool // 流量捕获开关（默认关；settings.traffic_capture）
-	// 联网搜索开关与来源（默认关；settings.web_search_*）。brave-free 需要 braveKey；tavily 需要 tavilyKey。
-	// webSearchProxy 是独立出口代理(http/https/socks5)，与记录流量的 MITM 代理无关。
+	trafficOn bool // traffic capture switch (default off; settings.traffic_capture)
+	// Web search switch and providers (default off; settings.web_search_*). brave-free needs braveKey; tavily needs tavilyKey.
+	// webSearchProxy is a dedicated egress proxy (http/https/socks5), separate from the MITM proxy recording traffic.
 	webSearchOn      bool
 	webSearchBackend string
 	braveKey         string
@@ -84,8 +84,8 @@ const (
 	settingTavilyKey        = "tavily_search_api_key"
 	settingWebSearchProxy   = "web_search_proxy"
 	settingWorkers          = "workers"
-	settingLLMPoolEnabled   = "llm_pool_enabled" // LLM 故障转移(轮询)总开关，默认关
-	settingGlobalProxy      = "global_proxy"     // 全局出口代理(http/https/socks5)：agent 目标流量作 MITM 上游出网；空=直连
+	settingLLMPoolEnabled   = "llm_pool_enabled" // LLM failover (round-robin) master switch, default off
+	settingGlobalProxy      = "global_proxy"     // global egress proxy (http/https/socks5): agent target traffic exits via it as MITM upstream; empty = direct
 	// defaultWebSearchBackend is used when web search is on but no backend was picked.
 	defaultWebSearchBackend = "ddgs"
 	// defaultWorkers is the concurrent work-agent count when the setting is unset.
@@ -109,7 +109,7 @@ func (m *Manager) Workers() int {
 // SetWorkers persists the concurrent work-agent count. Values <=0 are rejected.
 func (m *Manager) SetWorkers(n int) error {
 	if n <= 0 {
-		return fmt.Errorf("workers 必须 >0")
+		return fmt.Errorf("workers must be >0")
 	}
 	return m.pg.SetSetting(settingWorkers, strconv.Itoa(n))
 }
@@ -136,7 +136,7 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("[pg] 数据库配置来源: %s", source)
+	log.Printf("[pg] database config source: %s", source)
 	pg, err := pgdb.Open(dsn)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 			log.Printf("[traffic] disabled: %v", err)
 		} else {
 			m.traffic = tr
-			m.applyGlobalProxy() // 恢复持久化的全局出口代理(作 MITM 上游)
+			m.applyGlobalProxy() // restore the persisted global egress proxy (as MITM upstream)
 			go func() {
 				log.Printf("[traffic] recording proxy on %s (set HTTP_PROXY=%s + trust _ca CA)", proxyAddr, tr.ProxyAddr())
 				if err := tr.Start(); err != nil {
@@ -194,7 +194,7 @@ func (m *Manager) TrafficEnabled() bool {
 	return m.trafficOn
 }
 
-// LLMPoolEnabled reports whether LLM failover (轮询) is on (default off). Read from
+// LLMPoolEnabled reports whether LLM failover (round-robin) is on (default off). Read from
 // PG each call — it changes rarely and is never on a hot path.
 func (m *Manager) LLMPoolEnabled() bool {
 	if m.pg == nil {
@@ -312,7 +312,7 @@ const browserMCPName = "browser"
 func (m *Manager) syncBrowserMCPProxy() {
 	servers, err := m.pg.ListMCP()
 	if err != nil {
-		log.Printf("[mcp] browser 代理同步: 读取 MCP 列表失败: %v", err)
+		log.Printf("[mcp] browser proxy sync: failed to list MCP servers: %v", err)
 		return
 	}
 	var srv *pgdb.MCPServer
@@ -341,13 +341,13 @@ func (m *Manager) syncBrowserMCPProxy() {
 	srv.Args = encodeJSON(args)
 	srv.Env = encodeJSON(env)
 	if _, err := m.pg.SaveMCP(srv); err != nil {
-		log.Printf("[mcp] browser 代理同步失败: %v", err)
+		log.Printf("[mcp] browser proxy sync failed: %v", err)
 		return
 	}
 	if proxy != "" {
-		log.Printf("[mcp] browser MCP 已挂捕获代理 %s (CA %s)", proxy, cert)
+		log.Printf("[mcp] browser MCP capture proxy attached %s (CA %s)", proxy, cert)
 	} else {
-		log.Printf("[mcp] browser MCP 已移除捕获代理配置")
+		log.Printf("[mcp] browser MCP capture proxy config removed")
 	}
 }
 
@@ -363,7 +363,7 @@ const filesystemMCPName = "filesystem"
 func (m *Manager) ensureFilesystemMCPSandbox() {
 	servers, err := m.pg.ListMCP()
 	if err != nil {
-		log.Printf("[mcp] filesystem 沙箱同步: 读取 MCP 列表失败: %v", err)
+		log.Printf("[mcp] filesystem sandbox sync: failed to list MCP servers: %v", err)
 		return
 	}
 	var srv *pgdb.MCPServer
@@ -392,13 +392,13 @@ func (m *Manager) ensureFilesystemMCPSandbox() {
 		args[len(args)-1] = dir
 		srv.Args = encodeJSON(args)
 		if _, err := m.pg.SaveMCP(srv); err != nil {
-			log.Printf("[mcp] filesystem 沙箱路径迁移失败: %v", err)
+			log.Printf("[mcp] filesystem sandbox path migration failed: %v", err)
 		} else {
-			log.Printf("[mcp] filesystem 沙箱路径 → %s", dir)
+			log.Printf("[mcp] filesystem sandbox path → %s", dir)
 		}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("[mcp] filesystem 沙箱目录创建失败 %s: %v", dir, err)
+		log.Printf("[mcp] filesystem sandbox dir creation failed %s: %v", dir, err)
 	}
 }
 
@@ -499,10 +499,10 @@ func (m *Manager) applyGlobalProxy() {
 		return
 	}
 	if err := m.traffic.SetUpstream(raw); err != nil {
-		log.Printf("[traffic] 全局出口代理无效，忽略：%v", err)
+		log.Printf("[traffic] invalid global egress proxy, ignoring: %v", err)
 		return
 	}
-	log.Printf("[traffic] 全局出口代理已启用：目标流量经 %s 出网", raw)
+	log.Printf("[traffic] global egress proxy enabled: target traffic exits via %s", raw)
 }
 
 // ProxyCACert returns the recording proxy's CA cert path (empty when no proxy or
@@ -549,7 +549,7 @@ func taskFromPG(pt *pgdb.Task, store *pgdb.ExplorationStore, ic *intercept.Inter
 }
 
 // CreateTask creates a task + its exploration and makes it active.
-// timeoutSeconds is the task-level wall-clock budget (0 = 不限时).
+// timeoutSeconds is the task-level wall-clock budget (0 = unlimited).
 func (m *Manager) CreateTask(name, description, goal, egress string, llmProfileID *int64, timeoutSeconds int) (*Task, error) {
 	pt, err := m.pg.CreateTask(name, description, goal, egress, llmProfileID, timeoutSeconds)
 	if err != nil {
@@ -560,7 +560,7 @@ func (m *Manager) CreateTask(name, description, goal, egress string, llmProfileI
 	m.tasks[t.ID] = t
 	m.active = t.ID
 	m.mu.Unlock()
-	m.applyTaskEgress(t.ID) // 新任务成为 active → 据其出口选择设 MITM 上游
+	m.applyTaskEgress(t.ID) // new task became active → set the MITM upstream from its egress choice
 	return t, nil
 }
 
@@ -639,7 +639,7 @@ func (m *Manager) TaskStatus(id string) string {
 }
 
 // StampTaskFirstRun stamps first_run_at + deadline_at on the first real run (idempotent
-// in DB) and mirrors deadline_at on the live handle. Returns the deadline unix (0 = 不限).
+// in DB) and mirrors deadline_at on the live handle. Returns the deadline unix (0 = unlimited).
 func (m *Manager) StampTaskFirstRun(id string) (int64, error) {
 	n, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
@@ -720,7 +720,7 @@ func (m *Manager) SetTaskStatus(id, status string) error {
 	return nil
 }
 
-// ReactivateTask brings a stopped/finished task back to a runnable state (继续运行)
+// ReactivateTask brings a stopped/finished task back to a runnable state (resume running)
 // on both PG and the in-memory handle. Caller then kicks the engine (Rerun).
 func (m *Manager) ReactivateTask(id string) error {
 	n, err := strconv.ParseInt(id, 10, 64)
@@ -761,7 +761,7 @@ func (m *Manager) UpdateTask(id, name, description, goal, egress string, timeout
 	}
 	m.mu.Unlock()
 	if active {
-		m.applyTaskEgress(id) // 编辑了当前任务的出口选择 → 立即生效
+		m.applyTaskEgress(id) // this task's egress choice was edited → take effect immediately
 	}
 	return nil
 }
@@ -816,7 +816,7 @@ func (m *Manager) SetActive(id string) bool {
 	if !ok {
 		return false
 	}
-	m.applyTaskEgress(id) // 切换当前任务 → 据其出口选择设 MITM 上游
+	m.applyTaskEgress(id) // switched active task → set the MITM upstream from its egress choice
 	return true
 }
 

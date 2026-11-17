@@ -144,7 +144,7 @@ export default function InterceptPage() {
   const [form, setForm]       = React.useState<RuleForm>(defaultForm());
   const [saving, setSaving]   = React.useState(false);
   const [regexErr, setRegexErr] = React.useState("");
-  const [regexWarn, setRegexWarn] = React.useState(false); // true = JS 无法解析但可能是合法 Go 语法
+  const [regexWarn, setRegexWarn] = React.useState(false); // true = JS can't parse it but it may be valid Go syntax
 
   // ---- tool scope dialog ----
   const [scopeOpen, setScopeOpen]       = React.useState(false);
@@ -175,8 +175,8 @@ export default function InterceptPage() {
       setRegexErr("");
       setRegexWarn(false);
     } catch {
-      // JS RegExp 不支持 Go RE2 扩展语法（如 (?i) 内联 flag）。
-      // 这里只是预览校验失败，不代表 Go 端无效；交给服务端最终验证。
+      // JS RegExp lacks Go RE2 extensions (e.g. inline flags like (?i)).
+      // This is only a preview-check failure, not proof the Go side is invalid; the server validates for real.
       setRegexErr("");
       setRegexWarn(true);
     }

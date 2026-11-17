@@ -10,14 +10,14 @@ import (
 const sampleRepro = `{
   "entry_point": "POST /user/validate/otp/forgetPasswordVerify",
   "prerequisites": [
-    "注册测试账号：POST /user/register {\"mobile\":\"13800000000\",\"pwd\":\"P@ssw0rd123\"} → 200 {\"code\":0}",
-    "登录取会话：POST /user/login → 返回 Set-Cookie: SESSION=abc"
+    "Register a test account: POST /user/register {\"mobile\":\"13800000000\",\"pwd\":\"P@ssw0rd123\"} → 200 {\"code\":0}",
+    "Log in to obtain a session: POST /user/login → returns Set-Cookie: SESSION=abc"
   ],
   "steps": [
-    {"request": "POST /user/validate/otp/forgetPasswordVerify HTTP/1.1\nHost: t.example.com\nContent-Type: application/json\n\n{\"mobile\":\"13800000000\",\"otp\":\"000000\"}", "expected": "200 {\"code\":0,\"token\":\"...\"}", "proves": "OTP 未校验即返回重置 token"},
-    {"request": "POST /user/resetPassword HTTP/1.1\n\n{\"token\":\"...\",\"pwd\":\"Hacked1.\"}", "expected": "200 {\"code\":0}", "proves": "任意账户密码可被重置"}
+    {"request": "POST /user/validate/otp/forgetPasswordVerify HTTP/1.1\nHost: t.example.com\nContent-Type: application/json\n\n{\"mobile\":\"13800000000\",\"otp\":\"000000\"}", "expected": "200 {\"code\":0,\"token\":\"...\"}", "proves": "reset token is returned without OTP validation"},
+    {"request": "POST /user/resetPassword HTTP/1.1\n\n{\"token\":\"...\",\"pwd\":\"Hacked1.\"}", "expected": "200 {\"code\":0}", "proves": "the password of any account can be reset"}
   ],
-  "provenance": "由『认证绕过』意图发现，依赖忘记密码流程枚举"
+  "provenance": "Found by the auth-bypass intent via forgot-password flow enumeration"
 }`
 
 func TestReproToBlocks_ZhCN(t *testing.T) {
@@ -33,7 +33,7 @@ func TestReproToBlocks_ZhCN(t *testing.T) {
 			codeCount++
 		}
 	}
-	for _, want := range []string{"【来源】", "【入口点】", "【前置条件】", "【复现步骤】", "注册测试账号", "OTP 未校验", "任意账户密码可被重置"} {
+	for _, want := range []string{"Origin:", "Entry point:", "Prerequisites:", "Reproduction steps:", "Register a test account", "reset token is returned without OTP validation", "the password of any account can be reset"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("rendered blocks missing %q\n---\n%s", want, joined)
 		}
@@ -72,14 +72,14 @@ func TestReproToBlocks_Empty(t *testing.T) {
 // assembleVuln must prefer the captured reproduction over AI test_process and PoC.
 func TestAssembleVuln_PrefersReproduction(t *testing.T) {
 	f := FindingInput{
-		VulnClass:    "OTP 校验绕过",
+		VulnClass:    "OTP Verification Bypass",
 		Severity:     "critical",
-		Summary:      "忘记密码流程 OTP 未校验",
+		Summary:      "OTP not validated in the forgot-password flow",
 		PoC:          "some raw poc that should NOT win",
 		Reproduction: json.RawMessage(sampleRepro),
 	}
 	enr := Enrichment{
-		Title:       "OTP 校验绕过导致任意账户接管",
+		Title:       "OTP verification bypass allows arbitrary account takeover",
 		TestProcess: []procBlock{{Type: "text", Content: "AI-reconstructed step that should NOT win"}},
 	}
 	d := assembleVuln("zh-CN", f, enr, "3.1.1", "", nil)
@@ -90,7 +90,7 @@ func TestAssembleVuln_PrefersReproduction(t *testing.T) {
 	if strings.Contains(joined, "should NOT win") {
 		t.Errorf("captured reproduction did not take priority; got AI/PoC content:\n%s", joined)
 	}
-	if !strings.Contains(joined, "【入口点】") || !strings.Contains(joined, "任意账户密码可被重置") {
+	if !strings.Contains(joined, "Entry point:") || !strings.Contains(joined, "the password of any account can be reset") {
 		t.Errorf("captured reproduction not rendered into test_process:\n%s", joined)
 	}
 }

@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 
 type TFn = ReturnType<typeof useTranslation>["t"];
 
-// Mock demo：无后端 SSE，塞几行示例日志。
+// Mock demo: no backend SSE; seed a few sample log lines.
 function buildMockLogs(t: TFn): LogLine[] {
   return [
     { seq: 1, ts: "2026-07-26T03:55:00Z", level: "info", tag: "engine", text: "AntiFox v2.0.0 backend listening on :8787 (workers=3)" },
@@ -42,7 +42,7 @@ const levelDot: Record<LogLine["level"], string> = {
 function fmtTime(ts: string) {
   const d = new Date(ts);
   if (isNaN(d.getTime())) return "";
-  // 显示完整日期+时间（登录日志等需按日期区分，仅时间会误导）。
+  // Show full date+time (login logs etc. need day-level distinction; time alone misleads).
   return d.toLocaleString("zh-CN", {
     year: "numeric",
     month: "2-digit",
@@ -78,7 +78,7 @@ export default function LogsPage() {
   );
 }
 
-// ---------- 系统日志（实时 SSE 流）----------
+// ---------- System log (live SSE stream) ----------
 function SystemLogPanel() {
   const { t } = useTranslation();
   const [lines, setLines] = React.useState<LogLine[]>([]);
@@ -264,7 +264,7 @@ function SystemLogPanel() {
   );
 }
 
-// ---------- 登录与审计（审计表，服务端分页）----------
+// ---------- Login & audit (audit table, server-side pagination) ----------
 const PAGE_SIZE = 50;
 
 function AuditLogPanel() {

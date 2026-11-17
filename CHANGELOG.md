@@ -1,28 +1,28 @@
-# 更新日志 · Changelog
+# Changelog
 
-本项目的版本更新摘要。格式参考 [Keep a Changelog](https://keepachangelog.com/)，版本遵循 [SemVer](https://semver.org/)。
+Notable changes per version. Format follows [Keep a Changelog](https://keepachangelog.com/); versioning follows [SemVer](https://semver.org/).
 
 ## v2.0.3
 
-- **LLM 自定义会话头**：每个 LLM 配置可设一个 HTTP 头，头值自动为当前会话 session id —— 适配 opencode 等按 session 做提示缓存 / 粘性路由的网关。
-- **全局出口代理**：所有 Agent 的目标流量可经一个出口代理（http/https/socks5）出网，隐藏源 IP / 走跳板；带「测试可用性」（经代理回显出口 IP）。
-- **按任务选出口**：新建任务时可选该任务走全局代理还是直连。
-- **确认即富化**：人工确认漏洞后自动富化成结构化数据，确认即可交付。
-- **报告管理**：新建报告默认只列已确认漏洞（显示状态 / CVSS）；正文复用已富化数据。
-- **证据图注自动填充**：证据截图图注按复现步骤文案自动生成，可编辑。
-- **漏洞详情打磨**：状态下拉、分区标题、一键复制。
-- **流量任务筛选修复**：按任务筛选叠加任务活动时间窗，同一目标多次测试不再串流量。
-- 系统配置页改为双列自适应布局。
+- **Per-session LLM header**: each LLM config can set one HTTP header whose value is automatically the current session id — fits gateways such as opencode that do per-session prompt caching / sticky routing.
+- **Global egress proxy**: target traffic of all agents can leave the network through a single egress proxy (http/https/socks5) to hide the source IP / route via a jump host; includes a "test availability" check (echoes the egress IP through the proxy).
+- **Per-task egress**: when creating a task, choose whether it uses the global proxy or connects directly.
+- **Confirm-to-enrich**: manually confirmed findings are enriched into structured data automatically — confirmation makes them deliverable.
+- **Report management**: new reports list only confirmed findings by default (with status / CVSS); the body reuses the enriched data.
+- **Auto-filled evidence captions**: evidence screenshot captions are generated from the reproduction steps and remain editable.
+- **Finding detail polish**: status dropdown, section headings, one-click copy.
+- **Traffic task filter fix**: filtering by task now intersects with the task's activity window, so traffic no longer leaks across repeated tests of the same target.
+- The system settings page now uses a responsive two-column layout.
 
 ## v2.0.2
 
-- **一键更新**：从系统配置页检查并安装 GitHub 新版本（SHA256 校验 / 原子换装 / 失败自动回滚），数据不受影响。
-- 发布产物内附 `start.sh` 守护脚本与 systemd 模板。
+- **One-click update**: check for and install new GitHub releases from the system settings page (SHA256 verification / atomic swap / automatic rollback on failure); data is unaffected.
+- Release artifacts now bundle a `start.sh` supervisor script and a systemd unit template.
 
 ## v2.0.1
 
-- 复现步骤落库时自动关联真实流量包。
+- Reproduction steps are linked to the real traffic capture on save.
 
 ## v2.0.0
 
-- 证据驱动交付：复现过程就地落库、发现页按利用链分步、每步关联真实流量包；人工级三语报告。
+- Evidence-driven delivery: reproduction steps persisted in place, findings page organized by exploit chain with per-step traffic captures; human-grade trilingual reports.

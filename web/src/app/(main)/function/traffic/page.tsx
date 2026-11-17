@@ -106,13 +106,13 @@ export default function TrafficPage() {
   const [method, setMethod] = React.useState("all");
   const [taskFilter, setTaskFilter] = React.useState("all");
   const [tasks, setTasks] = React.useState<Task[]>([]);
-  // 高级筛选：路径 / 状态码桶 / 响应长度区间（走后端索引列）
+  // Advanced filters: path / status-code buckets / body-length range (backed by indexed columns)
   const [path, setPath] = React.useState("");
   const [pathQ, setPathQ] = React.useState("");
   const [statusFilter, setStatusFilter] = React.useState("all");
   const [respMin, setRespMin] = React.useState("");
   const [respMax, setRespMax] = React.useState("");
-  // 正文搜索：请求+响应解码后全文，FTS trigram（≥3 字），命中带高亮片段
+  // Body search: full text over decoded request+response, FS trigram (>=3 chars), matches with highlighted snippets
   const [body, setBody] = React.useState("");
   const [bodyQ, setBodyQ] = React.useState("");
 
@@ -120,10 +120,10 @@ export default function TrafficPage() {
   const [selected, setSelected] = React.useState<TrafficExchange | null>(null);
   const [detail, setDetail] = React.useState<TrafficDetail | null>(null);
   const [detailLoading, setDetailLoading] = React.useState(false);
-  const [expanded, setExpanded] = React.useState(false); // 放大详情面板(便于截完整包)
-  const [shotMode, setShotMode] = React.useState(false); // 截图模式：请求+响应一屏，替代 Burp 截图
-  const [selectedFlows, setSelectedFlows] = React.useState<Set<string>>(new Set()); // 勾选待关联的流量
-  const [linkOpen, setLinkOpen] = React.useState(false); // 关联到漏洞弹窗
+  const [expanded, setExpanded] = React.useState(false); // enlarge the detail pane (to capture the full exchange)
+  const [shotMode, setShotMode] = React.useState(false); // screenshot mode: request+response on one screen, a Burp-screenshot replacement
+  const [selectedFlows, setSelectedFlows] = React.useState<Set<string>>(new Set()); // flows checked for linking
+  const [linkOpen, setLinkOpen] = React.useState(false); // link-to-finding dialog
 
   // Task list drives the per-task filter dropdown (traffic is host-keyed with no
   // task column, so the backend scopes a task by its discovered asset hosts).
@@ -342,7 +342,7 @@ export default function TrafficPage() {
         </div>
       </div>
 
-      {/* 高级筛选：路径 / 状态码桶 / 响应长度区间（305k+ 条里精确定位到那一个包）*/}
+      {/* Advanced filters: path / status-code buckets / body-length range (pin down one exchange among 305k+) */}
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5">
         <span className="pl-1 text-xs font-medium text-muted-foreground">{t("traffic.advFilter")}</span>
         <div className="relative">
@@ -401,7 +401,7 @@ export default function TrafficPage() {
         <p className="text-xs text-muted-foreground">{t("traffic.taskHint")}</p>
       )}
 
-      {/* 勾选流量 → 关联到漏洞（作证据来源） */}
+      {/* Checked flows → link to a finding (as evidence source) */}
       {selectedFlows.size > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-muted-foreground">{t("traffic.selectedN", { count: selectedFlows.size })}</span>
@@ -611,10 +611,10 @@ export default function TrafficPage() {
         )}
       </div>
 
-      {/* 截图模式：请求+响应一屏、自说明头，替代 Burp 截图（与漏洞详情共用 PacketShotModal）*/}
+      {/* Screenshot mode: request+response on one screen with a self-describing header, a Burp-screenshot replacement (shares PacketShotModal with the finding detail) */}
       {shotMode && selected && <PacketShotModal exchange={selected} onClose={() => setShotMode(false)} />}
 
-      {/* 关联到漏洞：把勾选的流量关到某个漏洞作证据来源 */}
+      {/* Link to finding: attach the checked flows to a finding as evidence sources */}
       <LinkTrafficDialog
         open={linkOpen}
         exchangeIds={Array.from(selectedFlows)}

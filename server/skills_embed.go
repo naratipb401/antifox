@@ -5,7 +5,7 @@ package server
 // Default skill library, embedded into the single binary (production `-tags embedui`
 // build). The repo `skills/` dir is copied into `server/skillsdist/` at build time
 // (mirrors `server/webui/dist`), then materialized into the writable skill dir on
-// first run — so a fresh cloud / on-prem deployment gets the full skill library from
+// first run, so a fresh cloud / on-prem deployment gets the full skill library from
 // the binary alone, with no external files tied to a dev machine.
 
 import (
@@ -21,7 +21,7 @@ var embeddedSkills embed.FS
 
 // materializeEmbeddedSkills writes each embedded default skill into skillDir when its
 // directory is absent (seed-if-missing). Existing skills and user edits are never
-// overwritten. report-generation is intentionally NOT embedded — it is regenerated
+// overwritten. report-generation is intentionally NOT embedded; it is regenerated
 // from Go defaults by report.SeedSkillFiles so its trilingual skeleton never drifts.
 func materializeEmbeddedSkills(skillDir string) {
 	root, err := fs.Sub(embeddedSkills, "skillsdist")
@@ -42,13 +42,13 @@ func materializeEmbeddedSkills(skillDir string) {
 			continue // already present → keep (never clobber edits)
 		}
 		if err := writeEmbeddedSkill(root, name, skillDir); err != nil {
-			log.Printf("[skill] 物化 %s 失败: %v", name, err)
+			log.Printf("[skill] failed to materialize %s: %v", name, err)
 			continue
 		}
 		seeded++
 	}
 	if seeded > 0 {
-		log.Printf("[skill] 物化内置 skill %d 个 → %s", seeded, skillDir)
+		log.Printf("[skill] materialized %d embedded skills into %s", seeded, skillDir)
 	}
 }
 

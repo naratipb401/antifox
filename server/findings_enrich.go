@@ -1,9 +1,9 @@
 package server
 
-// Finding enrichment (漏洞管理深化): an AI-generated / human-edited structured
-// overlay on a raw finding node, keyed by exploration node id. Shared by the
+// Finding enrichment (deeper vulnerability management): an AI-generated / human-edited
+// structured overlay on a raw finding node, keyed by exploration node id. Shared by the
 // findings page, the task-detail tab, and the report pipeline. The node payload
-// (what agent tools see) is never mutated — enrichment is a management layer.
+// (what agent tools see) is never mutated -- enrichment is a management layer.
 
 import (
 	"encoding/json"
@@ -76,7 +76,7 @@ func dbEnrichmentFromReport(nodeID int64, r report.Enrichment) *db.FindingEnrich
 }
 
 // reportEnrichmentFromDB reconstructs a report.Enrichment from a stored row by
-// composing the JSON the report type expects and unmarshaling it — avoids
+// composing the JSON the report type expects and unmarshaling it -- avoids
 // exporting the report package's internal block type.
 func reportEnrichmentFromDB(e *db.FindingEnrichment) *report.Enrichment {
 	if e == nil {
@@ -110,32 +110,36 @@ func nodeIDFromPath(r *http.Request) (int64, bool) {
 	return id, err == nil && id > 0
 }
 
-// GET /api/findings/{id} — finding + enrichment (enrichment null when not analyzed).
+// GET /api/findings/{id} - finding + enrichment (enrichment null when not analyzed).
 func (s *Server) findingDetail(w http.ResponseWriter, r *http.Request) {
 	id, ok := nodeIDFromPath(r)
 	if !ok {
-		writeErr(w, 400, "无效的 finding id")
+		writeErr(w, 400, "invalid finding id")
 		return
 	}
 	f, err := s.m.pg.GetFindingByNodeID(id)
 	if err != nil || f == nil {
-		writeErr(w, 404, "未找到漏洞")
+		writeErr(w, 404, "finding not found")
 		return
 	}
 	enr, _ := s.m.pg.GetFindingEnrichment(id)
-	// 结构化复现过程（agent 就地记录的 入口/前置/有序步骤/来源）直通前端，供"显式分步"渲染 +
-	// 每步证据挂载。空则前端回退到 enrichment.test_process 平铺展示。
+	// the structured reproduction (entry / preconditions / ordered steps / sources as
+	// recorded by the agent) is passed through to the frontend for "explicit steps"
+	// rendering + per-step evidence attachment. When empty the frontend falls back to
+	// the flat enrichment.test_process display.
 	var repro any
 	if len(f.Reproduction) > 2 {
 		// Resolve each step's verbatim request back to the exact recorded traffic
-		// exchange (stateless, via the body index), so每步 gets a jump-to-traffic link.
+		// exchange (stateless, via the body index), so every step gets a jump-to-traffic link.
 		// Done here (view time) so it works for findings recorded before this feature,
 		// no agent re-run needed. The traffic store may be nil (capture off) → steps
 		// just carry no exchange_id and the UI shows no jump.
 		var rp report.Reproduction
 		if json.Unmarshal(f.Reproduction, &rp) == nil {
-			// 若落库时已解析(任一步带 exchange_id)则直接读存储;否则 view-time 用任务时间窗口兜底
-			// 解析(与 report_finding 落库时的 resolver 同逻辑),让存量 finding 也补上跳转链接。
+			// if exchange ids were already resolved at record time (any step carries
+			// one) read them from storage; otherwise resolve at view time within the
+			// task time window (same resolver as report_finding) so older findings
+			// get the jump links too.
 			hasResolved := false
 			for _, st := range rp.Steps {
 				if st.ExchangeID != "" {
@@ -173,7 +177,7 @@ func (s *Server) findingDetail(w http.ResponseWriter, r *http.Request) {
 // traffic exchange ids AT RECORD TIME. It is the host-side callback wired into the
 // worker's report_finding tool: when an agent records a finding, each step's verbatim
 // request is matched against the traffic captured in THIS task's time window (start
-// → now), in step order — so every step gets a jump-to-traffic link up front, with
+// → now), in step order -- so every step gets a jump-to-traffic link up front, with
 // the full time/order context that view-time guessing lacks. Returns the reproduction
 // with steps[].exchange_id filled where matched; unchanged on any failure.
 func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json.RawMessage {
@@ -211,18 +215,18 @@ func (s *Server) resolveFindingTraffic(taskID int64, repro json.RawMessage) json
 	return repro
 }
 
-// POST /api/findings/{id}/enrich — run AI enrichment, persist, return it.
+// POST /api/findings/{id}/enrich - run AI enrichment, persist, return it.
 // clipUTF8 truncates s to at most n bytes, keeping it valid UTF-8.
 func clipUTF8(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return strings.ToValidUTF8(s[:n], "") + "…"
+	return strings.ToValidUTF8(s[:n], "") + "..."
 }
 
 // findingSetupTraffic pulls the target's REAL account-registration / login / OTP /
 // captcha request packets from recorded traffic (bounded), so the reproduction recipe's
-// 前置条件 can spell out how to register a test account + log in with VERBATIM packets —
+// preconditions can spell out how to register a test account + log in with VERBATIM packets --
 // the platform's edge over AI-reconstructed PoC (which errs). Empty when no traffic.
 func (s *Server) findingSetupTraffic(taskID int64) string {
 	if s.m == nil || s.m.traffic == nil {
@@ -252,13 +256,13 @@ func (s *Server) findingSetupTraffic(taskID int64) string {
 			if e != nil {
 				continue
 			}
-			fmt.Fprintf(&b, "\n### %s %s (HTTP %d)\n[请求]\n%s\n[响应]\n%s\n", ex.Method, ex.URL, ex.Status, clipUTF8(req, 1400), clipUTF8(resp, 900))
+			fmt.Fprintf(&b, "\n### %s %s (HTTP %d)\n[Request]\n%s\n[Response]\n%s\n", ex.Method, ex.URL, ex.Status, clipUTF8(req, 1400), clipUTF8(resp, 900))
 		}
 	}
 	return b.String()
 }
 
-// enrichJob is the in-memory state of one async 「AI 分析」 run for a finding node.
+// enrichJob is the in-memory state of one async "AI analysis" run for a finding node.
 type enrichJob struct {
 	Status    string         `json:"status"` // analyzing | done | failed
 	Error     string         `json:"error,omitempty"`
@@ -266,19 +270,19 @@ type enrichJob struct {
 	Result    *enrichmentDTO `json:"enrichment,omitempty"` // set when Status==done
 }
 
-// POST /api/findings/{id}/enrich — start (or re-attach to) async AI enrichment.
+// POST /api/findings/{id}/enrich - start (or re-attach to) async AI enrichment.
 // Returns immediately with {status:"analyzing"}; the generation runs on s.ctx so a
 // page switch / client disconnect can't abort it, and re-clicks dedup to the running
 // job. Poll GET /api/findings/{id}/enrich/status for the result.
 func (s *Server) findingEnrich(w http.ResponseWriter, r *http.Request) {
 	id, ok := nodeIDFromPath(r)
 	if !ok {
-		writeErr(w, 400, "无效的 finding id")
+		writeErr(w, 400, "invalid finding id")
 		return
 	}
 	f, err := s.m.pg.GetFindingByNodeID(id)
 	if err != nil || f == nil {
-		writeErr(w, 404, "未找到漏洞")
+		writeErr(w, 404, "finding not found")
 		return
 	}
 	company := strings.TrimSpace(r.URL.Query().Get("company"))
@@ -286,7 +290,7 @@ func (s *Server) findingEnrich(w http.ResponseWriter, r *http.Request) {
 
 	s.enrichMu.Lock()
 	if j := s.enrichJobs[id]; j != nil && j.Status == "analyzing" {
-		snap := *j // already running — re-attach, don't start a second generation
+		snap := *j // already running -- re-attach, don't start a second generation
 		s.enrichMu.Unlock()
 		writeJSON(w, 202, snap)
 		return
@@ -300,13 +304,13 @@ func (s *Server) findingEnrich(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, snap)
 }
 
-// GET /api/findings/{id}/enrich/status — poll the async enrichment. Reports the
+// GET /api/findings/{id}/enrich/status - poll the async enrichment. Reports the
 // live job if one exists; otherwise falls back to the persisted enrichment (so a
 // return-to-page after completion shows the result even after job state is dropped).
 func (s *Server) findingEnrichStatus(w http.ResponseWriter, r *http.Request) {
 	id, ok := nodeIDFromPath(r)
 	if !ok {
-		writeErr(w, 400, "无效的 finding id")
+		writeErr(w, 400, "invalid finding id")
 		return
 	}
 	s.enrichMu.Lock()
@@ -336,20 +340,21 @@ func (s *Server) runEnrich(id int64, f *db.DBFinding, locale, company string) {
 	}
 	defer func() {
 		if rec := recover(); rec != nil {
-			fail(fmt.Sprintf("AI 分析异常：%v", rec))
+			fail(fmt.Sprintf("AI analysis panic: %v", rec))
 		}
 	}()
 	in := report.FindingInput{VulnClass: f.VulnClass, Severity: f.Severity, Summary: f.Summary, PoC: f.Evidence, CreatedAt: f.CreatedAt, Reproduction: f.Reproduction}
 	// Ground the AI PROSE (description/risk/remediation) in the finding's real work
 	// transcript (the intent that yielded it), so enrichment reflects what actually
 	// happened instead of expanding the one-line summary. Enrichment is prose-only
-	// (test_process comes deterministically from the captured 复现过程 or raw PoC), so we
-	// no longer pull SetupContext traffic to have the AI rebuild 前置条件.
-	// 只喂"请求(全)+响应(截断)+小结"、去掉思考噪音——更小、更省、且带真实响应(更准)。
+	// (test_process comes deterministically from the captured reproduction record or raw
+	// PoC), so we no longer pull SetupContext traffic to have the AI rebuild the preconditions.
+	// Feed only request (full) + response (truncated) + summary, dropping thinking noise --
+	// smaller, cheaper, and carries the real response (more accurate).
 	in.Transcript = s.m.pg.FindingReproTranscript(id, 22000)
 	enr := report.EnrichFinding(s.ctx, s.m.pg, s.skillDir, locale, in, company)
 	if strings.TrimSpace(enr.Title) == "" && len(enr.Description) == 0 {
-		fail("AI 分析失败（未配置 LLM 或模型未返回内容，可能超时）")
+		fail("AI analysis failed (LLM not configured or the model returned nothing; may have timed out)")
 		return
 	}
 	row := dbEnrichmentFromReport(id, enr)
@@ -358,7 +363,7 @@ func (s *Server) runEnrich(id int64, f *db.DBFinding, locale, company string) {
 		row.Status = prev.Status
 	}
 	if err := s.m.pg.UpsertFindingEnrichment(row); err != nil {
-		fail("保存失败: " + err.Error())
+		fail("save failed: " + err.Error())
 		return
 	}
 	saved, _ := s.m.pg.GetFindingEnrichment(id)
@@ -371,7 +376,7 @@ func (s *Server) runEnrich(id int64, f *db.DBFinding, locale, company string) {
 
 // enrichmentHasProse reports whether an enrichment already carries AI-generated
 // narrative (description / risk / remediation). A freshly-triaged row that only
-// has name/target/severity/status set has none — that's what triggers 确认即富化.
+// has name/target/severity/status set has none -- that's what triggers enrich-on-confirm.
 func enrichmentHasProse(e *db.FindingEnrichment) bool {
 	if e == nil {
 		return false
@@ -383,15 +388,17 @@ func enrichmentHasProse(e *db.FindingEnrichment) bool {
 	return nonEmptyArr(e.Description) || nonEmptyArr(e.RiskAnalysis) || nonEmptyArr(e.Remediation)
 }
 
-// PUT /api/findings/{id} — patch human-editable fields (name/target/severity/status).
-// 确认即富化（无感）：当状态被置为 confirmed 且该漏洞尚无富化正文时，直接在后台起一次
-// AI 富化（复用 runEnrich / enrichJob 机制），前端用现成的 enrich/status 轮询无感衔接。
-// 这样"人工确认"这一步就自带了报告所需的结构化正文，报告管理只收录已确认漏洞即全部可交付，
-// 导出时不再依赖脆弱的临场大生成。
+// PUT /api/findings/{id} - patch human-editable fields (name/target/severity/status).
+// Enrich-on-confirm (transparent): when the status is set to confirmed and the finding has
+// no enrichment prose yet, kick off an AI enrichment in the background (reusing the
+// runEnrich / enrichJob machinery); the frontend picks it up seamlessly via the existing
+// enrich/status polling. The "manual confirm" step then already carries the structured
+// prose the report needs, report management only accepts confirmed findings and everything
+// is deliverable -- no fragile on-the-fly mega-generation at export time.
 func (s *Server) findingUpdate(w http.ResponseWriter, r *http.Request) {
 	id, ok := nodeIDFromPath(r)
 	if !ok {
-		writeErr(w, 400, "无效的 finding id")
+		writeErr(w, 400, "invalid finding id")
 		return
 	}
 	var body struct {
@@ -399,15 +406,15 @@ func (s *Server) findingUpdate(w http.ResponseWriter, r *http.Request) {
 		Target   string `json:"target"`
 		Severity string `json:"severity"`
 		Status   string `json:"status"`
-		Locale   string `json:"locale"` // 自动富化用的报告语言（可选，前端传 i18n.language）
+		Locale   string `json:"locale"` // report locale for the auto enrichment (optional; frontend sends i18n.language)
 	}
 	if err := decode(r, &body); err != nil {
-		writeErr(w, 400, "请求格式错误")
+		writeErr(w, 400, "invalid request body")
 		return
 	}
 	if err := s.m.pg.UpdateFindingEnrichmentFields(id, strings.TrimSpace(body.Name),
 		strings.TrimSpace(body.Target), strings.TrimSpace(body.Severity), strings.TrimSpace(body.Status)); err != nil {
-		writeErr(w, 500, "保存失败: "+err.Error())
+		writeErr(w, 500, "save failed: "+err.Error())
 		return
 	}
 	saved, _ := s.m.pg.GetFindingEnrichment(id)

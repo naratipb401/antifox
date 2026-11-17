@@ -45,7 +45,7 @@ type checkRow struct {
 	Category string `json:"category"`
 	Name     string `json:"name"`
 	Desc     string `json:"desc"`
-	Result   string `json:"result"` // 通过 | 不通过
+	Result   string `json:"result"` // pass | fail
 }
 
 type summarySection struct {

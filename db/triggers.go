@@ -16,7 +16,7 @@ type AgentTrigger struct {
 	OnFinding          bool       `json:"on_finding"`
 	OnGoalMet          bool       `json:"on_goal_met"`
 	OnTaskTimeout      bool       `json:"on_task_timeout"`
-	IntervalMessage    string     `json:"interval_message"` // 各触发条件的独立用户消息
+	IntervalMessage    string     `json:"interval_message"` // per-trigger user message
 	FindingMessage     string     `json:"finding_message"`
 	GoalMessage        string     `json:"goal_message"`
 	TaskTimeoutMessage string     `json:"task_timeout_message"`

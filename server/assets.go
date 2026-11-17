@@ -39,7 +39,8 @@ func (s *Server) listCompanies(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	// task 过滤：只保留在该任务里拥有资产的企业（修"选任务后企业 tab 仍显示别任务企业"）。
+	// task filter: keep only companies that own assets in the given task (fixes the
+	// company tab showing other tasks' companies after a task is selected).
 	if taskID, _ := strconv.ParseInt(r.URL.Query().Get("task"), 10, 64); taskID > 0 {
 		if as := s.assetStore(); as != nil {
 			if ids, e := as.CompanyIDsForTask(taskID); e == nil {
@@ -247,7 +248,7 @@ func (s *Server) listAssets(w http.ResponseWriter, r *http.Request) {
 
 	var assets []*db.Asset
 	var err error
-	// total is the full match count ignoring limit/offset — lets the UI paginate on
+	// total is the full match count ignoring limit/offset; it lets the UI paginate on
 	// the server. For company/task scopes it falls back to the returned length.
 	total := 0
 
@@ -301,7 +302,7 @@ func (s *Server) assetCounts(w http.ResponseWriter, r *http.Request) {
 	var counts map[string]int
 	var err error
 	if taskID, _ := strconv.ParseInt(r.URL.Query().Get("task"), 10, 64); taskID > 0 {
-		counts, err = as.CountsByTypeForTask(taskID) // 按任务缩：资产分布/徽章计数
+		counts, err = as.CountsByTypeForTask(taskID) // scoped to the task: asset distribution / badge counts
 	} else {
 		counts, err = as.CountsByType()
 	}

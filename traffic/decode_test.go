@@ -25,7 +25,7 @@ func deflateBytes(s string) []byte {
 }
 
 func TestDecodeForView(t *testing.T) {
-	plain := `{"ok":true,"msg":"你好"}`
+	plain := `{"ok":true,"msg":"hi"}`
 
 	cases := []struct {
 		name string

@@ -70,77 +70,77 @@ func writeIfMissing(path, content string) error {
 
 const skillMD = `---
 name: report-generation
-description: 渗透测试报告生成的可编辑内容——AI 改写 prompt 与固定骨架（方法论/测试清单/工具/参考规范/测试人员），按语言分文件。报告引擎每次生成读盘，编辑即时生效。
+description: Editable content for penetration-test report generation — the AI-rewrite prompts and the fixed skeleton (methodology / checklist / tools / standards / personnel), one file set per locale. The report engine reads from disk on every generation, so edits take effect immediately.
 ---
 
-# 报告生成（可编辑内容）
+# Report generation (editable content)
 
-本 skill 存放**渗透测试报告的可编辑内容**，供「报告管理」的生成管线读取。修改后**下次生成即时生效**，无需重启或重新编译；任一文件缺失或损坏会自动回退到内置默认值。
+This skill holds the **editable content of the penetration test report**, read by the report-management generation pipeline. Changes take effect on the **next generation** — no restart or recompile needed; any missing or corrupted file falls back to the built-in defaults.
 
-## 结构
+## Layout
 
-- ` + "`prompts/report-level.tmpl`" + ` — 报告级叙述的 AI 提示词（背景 / 服务成果 / 整改结论 / 命中的测试项）。
-- ` + "`prompts/vuln-narrative.tmpl`" + ` — 单条漏洞改写的 AI 提示词（描述 / 复现过程 / 风险 / 修复 / CVSS）。
-- ` + "`skeleton/<语言>/methodology.json`" + ` — 2.2 测试流程：` + "`{intro, phases:[{name,desc}]}`" + `。
-- ` + "`skeleton/<语言>/checklist.json`" + ` — 2.3 测试清单：` + "`[{category,name,desc}]`" + `。AI 判定命中的项渲染为「不通过」。
-- ` + "`skeleton/<语言>/tools.json`" + ` — 2.4 测试工具：` + "`[{name,desc}]`" + `。
-- ` + "`skeleton/<语言>/standards.json`" + ` — 2.5 参考规范：` + "`[\"...\"]`" + `。
-- ` + "`skeleton/<语言>/personnel.json`" + ` — 2.1 测试人员默认值：` + "`[{name,role,contact}]`" + `（用户在报告设置里填了就以其为准）。
+- ` + "`prompts/report-level.tmpl`" + ` — AI prompt for the report-level narrative (background / service result / remediation conclusion / hit checklist items).
+- ` + "`prompts/vuln-narrative.tmpl`" + ` — AI prompt for per-finding rewriting (description / test process / risk / remediation / CVSS).
+- ` + "`skeleton/<locale>/methodology.json`" + ` — 2.2 test process: ` + "`{intro, phases:[{name,desc}]}`" + `.
+- ` + "`skeleton/<locale>/checklist.json`" + ` — 2.3 test checklist: ` + "`[{category,name,desc}]`" + `. Items the AI marks as hit render as "fail".
+- ` + "`skeleton/<locale>/tools.json`" + ` — 2.4 testing tools: ` + "`[{name,desc}]`" + `.
+- ` + "`skeleton/<locale>/standards.json`" + ` — 2.5 referenced standards: ` + "`[\"...\"]`" + `.
+- ` + "`skeleton/<locale>/personnel.json`" + ` — 2.1 default personnel: ` + "`[{name,role,contact}]`" + ` (values the user fills in under report settings take precedence).
 
-语言目录：` + "`zh-CN`" + `（简体）/ ` + "`zh-TW`" + `（繁体）/ ` + "`en-US`" + `（英文）。
+Locale dirs: ` + "`zh-CN`" + ` / ` + "`zh-TW`" + ` / ` + "`en-US`" + `.
 
-## Prompt 模板变量
+## Prompt template variables
 
-提示词是 Go ` + "`text/template`" + `，用 ` + "`===USER===`" + ` 分隔 system 与 user 两段：
+Prompts are Go ` + "`text/template`" + ` bodies, split into a system and a user part by ` + "`===USER===`" + `:
 
-- 报告级：` + "`{{.Company}}` `{{.Project}}` `{{.Client}}` `{{.FindingsList}}` `{{.LangDirective}}`" + `
-- 漏洞级：` + "`{{.Company}}` `{{.VulnClass}}` `{{.Severity}}` `{{.Summary}}` `{{.PoC}}` `{{.LangDirective}}`" + `
+- Report level: ` + "`{{.Company}}` `{{.Project}}` `{{.Client}}` `{{.FindingsList}}` `{{.LangDirective}}`" + `
+- Finding level: ` + "`{{.Company}}` `{{.VulnClass}}` `{{.Severity}}` `{{.Summary}}` `{{.PoC}}` `{{.LangDirective}}`" + `
 
-` + "`{{.LangDirective}}`" + ` 会注入目标语言指令（简/繁/英），故 prompt 本身与语言无关、三语共用一份。
+` + "`{{.LangDirective}}`" + ` injects the target-language directive, so the prompt body itself is language-agnostic and shared by all locales.
 `
 
-const promptReportLevelTmpl = `你是{{.Company}}的资深渗透测试报告撰写专家，擅长撰写专业、客户可读、技术严谨的渗透测试报告。严格只输出 JSON，不要 markdown 代码块。
+const promptReportLevelTmpl = `You are a senior penetration-testing report author for {{.Company}}, skilled at writing professional, client-readable, technically rigorous penetration test reports. Output strictly JSON only, no markdown code fences.
 ===USER===
-根据以下项目与漏洞清单撰写报告综述内容。
+Write the report-level summary content based on the following project and findings list.
 
-项目名称：{{.Project}}
-客户名称：{{.Client}}
-漏洞清单：
+Project name: {{.Project}}
+Client name: {{.Client}}
+Findings:
 {{.FindingsList}}
-要求（专业交付口吻，不要出现"本次测试于今天"之类措辞）：
-- background：字符串数组，2 段。第一段说明客户委托{{.Company}}开展渗透测试及测试目标；第二段说明测试范围与人工+工具结合的方式。每段 60-130 字。
-- service_result：1 段，概述测试了哪些系统、发现漏洞的数量与严重度分布。
-- remediation_conclusion：1 段整改结论（首轮渗透默认全部待修复，建议尽快整改并复测）。
-- checklist_hits：字符串数组，根据漏洞类型推断命中的标准测试项名称（例如 "SQL 注入"、"未授权访问"、"登录认证绕过"、"敏感信息泄露"、"命令注入"、"跨站脚本攻击（XSS）"、"垂直越权访问" 等标准名称）。
+Requirements (professional delivery tone; avoid phrasing like "the test was performed today"):
+- background: string array, 2 paragraphs. Paragraph 1: the client engaged {{.Company}} to perform a penetration test, and the test objectives; paragraph 2: the test scope and the combination of manual and tool-driven testing. 60-130 words each.
+- service_result: 1 paragraph summarizing which systems were tested and the number and severity distribution of the findings.
+- remediation_conclusion: 1 remediation conclusion paragraph (first-round penetration: all findings pending remediation by default; recommend prompt remediation and retesting).
+- checklist_hits: string array; infer the standard checklist item names hit, based on the finding types (e.g. "SQL Injection", "Unauthorized Access", "Authentication Bypass", "Sensitive Information Disclosure", "Command Injection", "Cross-Site Scripting (XSS)", "Vertical Privilege Escalation" — use the standard names).
 
-只输出 JSON：{"background":["...","..."],"service_result":"...","remediation_conclusion":"...","checklist_hits":["...","..."]}
+Output JSON only: {"background":["...","..."],"service_result":"...","remediation_conclusion":"...","checklist_hits":["...","..."]}
 
-输出语言要求：{{.LangDirective}}
+Output language requirement: {{.LangDirective}}
 `
 
-const promptVulnTmpl = `你是{{.Company}}的资深渗透测试报告撰写专家。把漏洞原始记录改写为【交付级】报告正文——像资深顾问亲笔写给客户，精炼、专业、就事论事。严格只输出 JSON，不要 markdown 代码块，不要客套话、免责声明或放之四海皆准的套话。HTTP 请求/命令/响应等原文必须真实保留，不得编造。
+const promptVulnTmpl = `You are a senior penetration-testing report author for {{.Company}}. Rewrite the raw finding record into delivery-grade report prose — as if written personally for the client by a senior consultant: concise, professional, strictly to the point. Output strictly JSON only, no markdown code fences, no pleasantries, disclaimers, or universally-applicable boilerplate. Verbatim HTTP requests/commands/responses must be preserved as-is; never fabricate.
 ===USER===
-把下面这条漏洞改写成报告正文。核心要求：【精炼、具体、克制】——宁缺毋滥，不凑条数、不注水、不说正确的废话；每一句都要是针对本目标本漏洞的真信息。
+Rewrite the finding below into report prose. Core requirements: [concise, specific, restrained] — prefer quality over quantity: no padding, no filler, no technically-true-but-empty statements; every sentence must carry real information about this finding on this target.
 
-漏洞类型/原始名称：{{.VulnClass}}
-严重程度：{{.Severity}}
-原始摘要：
+Finding type / original name: {{.VulnClass}}
+Severity: {{.Severity}}
+Original summary:
 {{.Summary}}
-原始复现过程/证据：
+Original reproduction / evidence:
 {{.PoC}}
 
-字段要求：
-- title：规范、专业的漏洞名称（10-26 字，如"外部账户认证绕过致管理员接管漏洞"）。原始名已规范（含 CVE 等）则保留或微调，不要照抄摘要。
-- target：受影响主机或 URL，从摘要/证据中提取；无法确定留空字符串。
-- description：1 段、2-3 句。只说清三件事——这是什么漏洞、出在哪个点、本质成因。不堆 OWASP 分类、不复述修复、不空泛铺垫。
-- module：所属功能模块（简短，如"外部账户登录 / 未授权接口"）。
-- risk_analysis：2-4 条，每条一句，必须是【本目标本漏洞】能造成的具体后果（谁、能做什么、拿到什么数据或权限）。没有具体后果就少写，不要"可能影响系统安全"这类套话。
-- remediation：2-4 条，每条一句，具体可落地（改哪个点、怎么改、校验什么）。不要"加强安全意识""定期安全审计"这类空话。
-- CVSS 3.1：cvss_score(数字)、cvss_vector（如 "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"）、cvss_metrics（八项英文取值，如 {"AV":"Network","AC":"Low","PR":"None","UI":"None","S":"Unchanged","C":"High","I":"High","A":"High"}）。
+Field requirements:
+- title: a canonical, professional finding name (10-26 characters, e.g. "unauthenticated reset lets attacker take over admin account"). If the original name is already canonical (CVE ids etc.), keep it or adjust lightly; do not copy the summary verbatim.
+- target: the affected host or URL, extracted from the summary/evidence; empty string when undeterminable.
+- description: 1 paragraph, 2-3 sentences. State only three things — what the vulnerability is, where it occurs, and its root cause. No OWASP taxonomy dumping, no restating the fix, no vague padding.
+- module: the affected feature module (short, e.g. "external account login / unauthenticated endpoint").
+- risk_analysis: 2-4 items, one sentence each, each a concrete consequence THIS finding can cause on THIS target (who can do what, and what data or privileges they gain). Fewer items when there is no concrete consequence; no "may impact system security" boilerplate.
+- remediation: 2-4 items, one sentence each, concrete and actionable (what to change, how, and what to verify). No empty phrases like "raise security awareness" or "audit regularly".
+- CVSS 3.1: cvss_score (number), cvss_vector (e.g. "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"), cvss_metrics (the eight English values, e.g. {"AV":"Network","AC":"Low","PR":"None","UI":"None","S":"Unchanged","C":"High","I":"High","A":"High"}).
 
-不要输出 test_process——复现过程由平台用真实证据直接生成，返回 "test_process":[] 即可。
+Do not output test_process — the platform generates the reproduction from real evidence; just return "test_process":[].
 
-只输出 JSON：{"title":"...","target":"...","description":["..."],"module":"...","test_process":[],"risk_analysis":["..."],"remediation":["..."],"cvss_score":0,"cvss_vector":"...","cvss_metrics":{...}}
+Output JSON only: {"title":"...","target":"...","description":["..."],"module":"...","test_process":[],"risk_analysis":["..."],"remediation":["..."],"cvss_score":0,"cvss_vector":"...","cvss_metrics":{...}}
 
-输出语言要求：{{.LangDirective}}
+Output language requirement: {{.LangDirective}}
 `

@@ -206,7 +206,7 @@ export default function DashboardPage() {
   const [reports, setReports] = React.useState<ReportRecord[]>([]);
   const [roles, setRoles] = React.useState<RBACRole[]>([]);
 
-  // task filter (client-side scoping of task-level widgets; "all" = 全部任务)
+  // task filter (client-side scoping of task-level widgets; "all" = every task)
   const [selectedTask, setSelectedTask] = React.useState("all");
 
   // fast poll: tasks, findings, stats, pending, activity (every 5s)
@@ -228,7 +228,7 @@ export default function DashboardPage() {
         ]);
         if (!alive) return;
         setTasks(tr.tasks);
-        setActiveTaskId(tr.active ?? ""); // 活动流/链接的"当前任务"来源(未选任务时)
+        setActiveTaskId(tr.active ?? ""); // source of the activity feed/links' "current task" (when none selected)
         setFindings(fr);
         if (sr) setStats(sr);
         if (sets) setSettings(sets);
@@ -339,7 +339,7 @@ export default function DashboardPage() {
   const effectiveTrafficCount = isTaskScoped ? (scopedTrafficCount ?? 0) : trafficCount;
   const effectiveTrafficBuckets = isTaskScoped ? (scopedTrafficBuckets ?? {}) : trafficBuckets;
   // The activity feed is per-task (the endpoint requires a task); show the selected
-  // task's activity, else the active task's. This id also drives the "查看任务" link.
+  // task's activity, else the active task's. This id also drives the "view task" link.
   const activityTaskId = isTaskScoped ? selectedTask : activeTaskId;
 
   // activity feed follows the displayed task; re-fetch + poll when it changes.
@@ -405,7 +405,7 @@ export default function DashboardPage() {
       return [...scopedFindings]
         .sort((a, b) => {
           const d = (sevRank[b.severity] ?? 0) - (sevRank[a.severity] ?? 0);
-          return d !== 0 ? d : Date.parse(b.ts) - Date.parse(a.ts); // 等级降序,同级按时间新→旧
+          return d !== 0 ? d : Date.parse(b.ts) - Date.parse(a.ts); // severity desc, then newest first
         })
         .slice(0, 8);
     },
@@ -459,7 +459,7 @@ export default function DashboardPage() {
   }, [skillStats, mcpStats]);
   const hotMax = hotItems[0]?.calls ?? 1;
 
-  // capability rows for the 平台能力总览 card
+  // capability rows for the platform capabilities card
   const capRows: {
     icon: React.ElementType;
     label: string;
@@ -573,7 +573,7 @@ export default function DashboardPage() {
     return m;
   }, [tasks, convTokens, defaultProfileId]);
 
-  // selected profile tab: "all" = 全部; number = specific profile id
+  // selected profile tab: "all" = every profile; number = specific profile id
   const [tokenTab, setTokenTab] = React.useState<number | null | "all">("all");
   // day range for the daily bar chart
   const [tokenDays, setTokenDays] = React.useState<7 | 30 | 90 | 180 | 365>(30);
@@ -721,7 +721,7 @@ export default function DashboardPage() {
       {/* ── Row 1: 5 stat cards ── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
 
-        {/* 活跃任务 */}
+        {/* Active tasks */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -750,7 +750,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* 确认发现 */}
+        {/* Confirmed findings */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -768,7 +768,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* 资产节点 */}
+        {/* Asset nodes */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -783,7 +783,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* 流量交互 */}
+        {/* Traffic interactions */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -805,7 +805,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* LLM 用量 */}
+        {/* LLM usage */}
         <Card className="gap-1">
           <CardHeader className="pb-0">
             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -821,11 +821,12 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ── Row 1.5: 平台能力总览 | 最近报告 | 热门 Skill/MCP ──
-          平台能力总览 / 热门 Skill·MCP 为平台级(不受任务筛选)；最近报告为任务级(随任务筛选) ── */}
+      {/* ── Row 1.5: platform capabilities | recent reports | top Skill/MCP ──
+          capabilities / top Skill·MCP are platform-level (unaffected by the task filter);
+          recent reports are task-level (follow the task filter) ── */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
 
-        {/* 平台能力总览 */}
+        {/* Platform capabilities */}
         <Card className="p-4">
           <SectionTitle icon={LayersIcon}>{tr("dashboard.cap.title")}</SectionTitle>
           <div className="flex flex-col divide-y">
@@ -854,7 +855,7 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* 最近报告 */}
+        {/* Recent reports */}
         <Card className="p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-semibold">
@@ -898,7 +899,7 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* 热门 Skill / MCP */}
+        {/* Top Skill / MCP */}
         <Card className="p-4">
           <SectionTitle
             icon={SparklesIcon}
@@ -942,7 +943,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ── Row 2: LLM Token 消耗 ── */}
+      {/* ── Row 2: LLM token usage ── */}
       <Card className="p-4">
         {/* Header */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -1022,7 +1023,8 @@ export default function DashboardPage() {
             {/* Per-type bars */}
             <div className="space-y-3">
               {(() => {
-                // input 已含缓存；拆成不重叠三段：未命中输入 + 缓存命中 + 输出 = 总量。
+                // input already includes cache; split into three non-overlapping parts:
+                // cache-miss input + cache hit + output = total.
                 const total = displayedTokens.input + displayedTokens.output;
                 return [
                   { label: tr("dashboard.tokenConsumption.inputMiss"), value: displayedTokens.input - displayedTokens.cacheRead, barColor: dailyTrendConfig.input.color!,     text: "text-blue-400" },
@@ -1052,7 +1054,7 @@ export default function DashboardPage() {
 
             {/* Cache hit rate */}
             {(() => {
-              // input 已含缓存 → 命中率 = 缓存命中 / 总输入。
+              // input already includes cache → hit rate = cache hit / total input.
               const denominator = displayedTokens.input;
               const hitPct = denominator > 0 ? Math.round((displayedTokens.cacheRead / denominator) * 100) : 0;
               return (
@@ -1159,10 +1161,10 @@ export default function DashboardPage() {
         </div>
       </Card>
 
-      {/* ── Row 3: 活动流 | 发现 ── */}
+      {/* ── Row 3: activity feed | findings ── */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
 
-        {/* 活动流 */}
+        {/* Activity feed */}
         <Card className="p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-semibold">
@@ -1238,7 +1240,7 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* 发现 */}
+        {/* Findings */}
         <Card className="p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-semibold">
@@ -1289,7 +1291,7 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* ── Row 4: 任务表格 ── */}
+      {/* ── Row 4: task table ── */}
       <Card className="overflow-hidden p-0">
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-1.5 text-xs font-semibold">
@@ -1406,10 +1408,10 @@ export default function DashboardPage() {
         </table>
       </Card>
 
-      {/* ── Row 5: 资产分布 | 流量状态码 | 拦截 & 待审批 ── */}
+      {/* ── Row 5: asset distribution | traffic status codes | interception & pending approvals ── */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
 
-        {/* 资产分布 */}
+        {/* Asset distribution */}
         <Card className="p-4">
           <SectionTitle icon={NetworkIcon} sub={tr("dashboard.assets.byType")}>
             {tr("dashboard.assets.title")}
@@ -1443,7 +1445,7 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* 流量状态码 */}
+        {/* Traffic status codes */}
         <Card className="p-4">
           <SectionTitle icon={ActivityIcon} sub={tr("dashboard.traffic.requestCount", { count: effectiveTrafficCount })}>
             {tr("dashboard.traffic.title")}
@@ -1514,7 +1516,7 @@ export default function DashboardPage() {
           )}
         </Card>
 
-        {/* 系统状态 & 待审批 */}
+        {/* System status & pending approvals */}
         <Card className="p-4">
           <SectionTitle icon={ShieldCheckIcon}>{tr("dashboard.system.title")}</SectionTitle>
 

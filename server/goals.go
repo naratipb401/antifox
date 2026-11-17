@@ -16,14 +16,14 @@ type goalSpec struct {
 
 // createGoals materializes the goal node(s) under the task root (rel objective).
 // Decomposition is done ENTIRELY by the LLM (the project requires an LLM). There is
-// no rule-based fallback splitter — it only ever produced garbage (shredded URLs,
+// no rule-based fallback splitter - it only ever produced garbage (shredded URLs,
 // meaningless 2-way splits). If the LLM yields nothing (an error), the raw task goal
 // is used verbatim as a single goal so the task still has something to judge against.
 // Returns the seeded specs so callers can emit activity records for them.
 // emit, when non-nil, is forwarded to DecomposeGoals so LLM steps are visible in the UI.
 func (s *Server) createGoals(ctx context.Context, t *Task, emit func(db.Activity)) []goalSpec {
 	// Use the SAME LLM the task runs on (its pinned profile, else the active profile),
-	// NOT agent.FromEnv() — the LLM is configured via the UI (DB profile), not env vars,
+	// NOT agent.FromEnv() - the LLM is configured via the UI (DB profile), not env vars,
 	// so FromEnv returned empty and every task silently fell back to the crude rule
 	// splitter (which shredded URLs / made meaningless 2-way splits).
 	var specs []goalSpec
@@ -36,9 +36,9 @@ func (s *Server) createGoals(ctx context.Context, t *Task, emit func(db.Activity
 	}
 	if len(specs) == 0 {
 		// No rule-based splitting: use the raw task goal verbatim as a single goal
-		// (only reached on an LLM error — normal runs get real decomposed goals).
+		// (only reached on an LLM error - normal runs get real decomposed goals).
 		if g := strings.TrimSpace(t.Goal); g != "" {
-			log.Printf("[goals] task %s: LLM 目标拆解无产出，回退为「原始目标作为单目标」", t.ID)
+			log.Printf("[goals] task %s: LLM goal decomposition produced nothing; falling back to the raw goal as a single goal", t.ID)
 			specs = []goalSpec{{Text: g}}
 		}
 	}

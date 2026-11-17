@@ -21,10 +21,11 @@ import (
 
 const (
 	jwtKeyFilename = "jwt.key"
-	authPassKey    = "auth.password_hash" // 旧单用户密码（仅用于首启迁移到 rbac_users）
-	// defaultSessionTTL 是会话（JWT）时长的默认值——同时是"空闲超时"窗口：
-	// 活跃使用时后端会滑动续期（见 requireAuth），空闲超过该时长则 token 过期需重新登录。
-	// 可用设置 auth.session_ttl_minutes 覆盖（分钟）。
+	authPassKey    = "auth.password_hash" // legacy single-user password (only used to migrate to rbac_users on first boot)
+	// defaultSessionTTL is the default session (JWT) lifetime and doubles as the
+	// "idle timeout" window: active use slides the expiry forward (see requireAuth),
+	// while idle past it expires the token and forces a re-login.
+	// Overridable via the auth.session_ttl_minutes setting (in minutes).
 	defaultSessionTTL = 60 * time.Minute
 	sessionTTLKey     = "auth.session_ttl_minutes"
 	keyChars          = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -34,15 +35,17 @@ type ctxKey int
 
 const accessCtxKey ctxKey = 1
 
-// authClaims 携带用户 id(Subject) + 用户名 + 签发时的密码版本（token_version）。
-// Ver 让「改密/停用即踢下线」成立：校验时与库里当前 token_version 比对，不等即拒。
+// authClaims carries the user id (Subject) + username + the password version at issue
+// time (token_version). Ver makes "password change/disable kicks the session" work:
+// at validation time it is compared against the current token_version in the DB.
 type authClaims struct {
 	Username string `json:"usr"`
 	Ver      int    `json:"ver"`
 	jwt.RegisteredClaims
 }
 
-// CurrentAccess 从请求上下文取当前登录用户的 RBAC 授权画像（requireAuth 注入）。
+// CurrentAccess returns the signed-in user's RBAC access profile from the request
+// context (injected by requireAuth).
 func CurrentAccess(r *http.Request) *db.RBACAccess {
 	acc, _ := r.Context().Value(accessCtxKey).(*db.RBACAccess)
 	return acc
@@ -65,11 +68,12 @@ func loadOrCreateJWTKey(dataDir string) ([]byte, error) {
 	if err := os.WriteFile(path, buf, 0600); err != nil {
 		return nil, fmt.Errorf("write jwt key: %w", err)
 	}
-	log.Printf("[auth] 新 JWT key 已写入 %s", path)
+	log.Printf("[auth] new JWT key written to %s", path)
 	return buf, nil
 }
 
-// sessionTTL 读取会话时长（分钟）设置，未设/非法则回退默认。
+// sessionTTL reads the session lifetime (minutes) setting; falls back to the default
+// when unset or invalid.
 func (s *Server) sessionTTL() time.Duration {
 	if s.m != nil && s.m.pg != nil {
 		if m := s.m.pg.GetInt(sessionTTLKey, 0); m > 0 {
@@ -124,7 +128,8 @@ func extractToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
-// requireAuth 校验 JWT + 解析用户/权限注入 context。/api/auth/* 与 /api/health 豁免。
+// requireAuth validates the JWT and resolves/injects the user's permissions into the
+// request context. /api/auth/* and /api/health are exempt.
 func (s *Server) requireAuth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
@@ -134,25 +139,29 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 		}
 		claims, ok := parseJWT(extractToken(r), s.jwtKey)
 		if !ok {
-			writeErr(w, 401, "未授权或 token 已过期")
+			writeErr(w, 401, "unauthorized or expired token")
 			return
 		}
-		// 解析授权画像（供 RBAC 强制与管理），账号停用 / token 版本过期即拒。
+		// Resolve the access profile (used for RBAC enforcement and administration);
+		// reject when the account is disabled or the token version is stale.
 		if s.m != nil && s.m.pg != nil && claims.Subject != "" {
 			acc, err := s.m.pg.ResolveRBACAccess(claims.Subject)
 			if err == nil && acc != nil {
 				if !acc.User.Enabled {
-					writeErr(w, 403, "账号已停用")
+					writeErr(w, 403, "account disabled")
 					return
 				}
-				// token 版本校验：改密 / 停用后 token_version 自增，旧 token 携带的 Ver
-				// 落后即失效，强制重新登录。
+				// Token version check: token_version is bumped on password change /
+				// disable; a stale Ver carried by an old token is rejected, forcing
+				// a re-login.
 				if claims.Ver != acc.User.TokenVersion {
-					writeErr(w, 401, "登录状态已失效，请重新登录")
+					writeErr(w, 401, "session expired, sign in again")
 					return
 				}
-				// 滑动续期（= 空闲超时）：token 走过半程且仍在活跃使用，就签发新 token 经
-				// X-Refresh-Token 响应头回传，前端替换存储；空闲超过会话时长则自然过期需重登。
+				// Sliding renewal (= idle timeout): once a token is past half its
+				// lifetime and still in active use, a fresh token is returned via the
+				// X-Refresh-Token response header for the frontend to swap in; idle
+				// past the session TTL expires it and requires a re-login.
 				if claims.ExpiresAt != nil {
 					ttl := s.sessionTTL()
 					if rem := time.Until(claims.ExpiresAt.Time); rem > 0 && rem < ttl/2 {
@@ -163,10 +172,12 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 					}
 				}
 				r = r.WithContext(context.WithValue(r.Context(), accessCtxKey, acc))
-				// 权限强制拦截。安全阀：未映射路由放行；admin(全权)永不被拦；开关 rbac.enforce 默认 true。
+				// Permission enforcement. Safety valve: unmapped routes pass through;
+				// admin (full permissions) is never blocked; the rbac.enforce switch
+				// defaults to true.
 				if s.m.pg.GetBool("rbac.enforce", true) {
 					if perm := permissionForRequest(r.Method, r.URL.Path); perm != "" && !acc.Permissions[perm] {
-						writeErr(w, 403, "权限不足："+perm)
+						writeErr(w, 403, "insufficient permission: "+perm)
 						return
 					}
 				}
@@ -176,24 +187,25 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 	})
 }
 
-// bootstrapRBAC 首启把旧单用户密码迁移成内置 admin，并播种角色/权限（幂等）。
+// bootstrapRBAC on first boot migrates the legacy single-user password into the
+// built-in admin and seeds roles/permissions (idempotent).
 func (s *Server) bootstrapRBAC() {
 	if s.m == nil || s.m.pg == nil {
 		return
 	}
 	legacyHash, _, _ := s.m.pg.GetSetting(authPassKey)
 	if err := s.m.pg.BootstrapRBAC(legacyHash); err != nil {
-		log.Printf("[rbac] bootstrap 失败: %v", err)
+		log.Printf("[rbac] bootstrap failed: %v", err)
 		return
 	}
 	if strings.TrimSpace(legacyHash) != "" {
-		log.Printf("[rbac] 多用户权限就绪（已迁移旧密码为内置 admin）")
+		log.Printf("[rbac] multi-user access ready (legacy password migrated to built-in admin)")
 	} else {
-		log.Printf("[rbac] 多用户权限就绪")
+		log.Printf("[rbac] multi-user access ready")
 	}
 }
 
-// GET /api/auth/status — 是否已初始化（有平台用户）。
+// GET /api/auth/status - whether the platform is initialized (a platform user exists).
 func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
@@ -201,37 +213,38 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	needs, err := pg.RBACNeedsBootstrap()
 	if err != nil {
-		writeErr(w, 500, "查询失败")
+		writeErr(w, 500, "query failed")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"initialized": !needs})
 }
 
-// POST /api/auth/init — 首启设管理员密码（建内置 admin）。
+// POST /api/auth/init - sets the admin password on first boot (creates the built-in admin).
 func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
 		return
 	}
 	ip := clientIP(r)
-	// fail-closed：初始化守卫查询出错时一律拒绝，绝不把查询失败当成「未初始化」而放行设置
-	// 密码（否则查询失败可被用来重置管理员口令）。
+	// fail-closed: when the init-guard query errors, always reject -- never treat a
+	// query failure as "not initialized" and allow setting the password (otherwise a
+	// query failure could be abused to reset the admin password).
 	needs, err := pg.RBACNeedsBootstrap()
 	if err != nil {
-		pg.RecordAudit("", "auth", "init", "fail", ip, "初始化守卫查询失败（已拒绝）", nil)
-		writeErr(w, 503, "服务暂时不可用")
+		pg.RecordAudit("", "auth", "init", "fail", ip, "init guard query failed (rejected)", nil)
+		writeErr(w, 503, "temporarily unavailable")
 		return
 	}
 	if !needs {
-		pg.RecordAudit("", "auth", "init", "fail", ip, "平台已初始化，拒绝重复设置密码", nil)
-		writeErr(w, 403, "已初始化")
+		pg.RecordAudit("", "auth", "init", "fail", ip, "platform already initialized, repeat setup rejected", nil)
+		writeErr(w, 403, "already initialized")
 		return
 	}
 	var req struct {
 		Password string `json:"password"`
 	}
 	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, "请求格式错误")
+		writeErr(w, 400, "invalid request body")
 		return
 	}
 	if msg := validatePasswordStrength(req.Password); msg != "" {
@@ -240,28 +253,28 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		writeErr(w, 500, "密码加密失败")
+		writeErr(w, 500, "password hashing failed")
 		return
 	}
 	if err := pg.BootstrapRBAC(string(hash)); err != nil {
-		writeErr(w, 500, "初始化失败: "+err.Error())
+		writeErr(w, 500, "init failed: "+err.Error())
 		return
 	}
-	_ = pg.SetSetting(authPassKey, string(hash)) // 兼容保留
+	_ = pg.SetSetting(authPassKey, string(hash)) // kept for compatibility
 	ver := 0
 	if u, e := pg.GetRBACUserByID("admin"); e == nil && u != nil {
 		ver = u.TokenVersion
 	}
 	tok, err := signJWTTTL(s.jwtKey, "admin", "admin", ver, s.sessionTTL())
 	if err != nil {
-		writeErr(w, 500, "token 生成失败")
+		writeErr(w, 500, "token generation failed")
 		return
 	}
-	pg.RecordAudit("admin", "auth", "init", "success", ip, "首启初始化管理员密码", nil)
+	pg.RecordAudit("admin", "auth", "init", "success", ip, "first-boot admin password init", nil)
 	writeJSON(w, 200, map[string]any{"token": tok})
 }
 
-// POST /api/auth/change-password — 改当前登录用户的密码。
+// POST /api/auth/change-password - changes the signed-in user's password.
 func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
@@ -269,12 +282,12 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, ok := parseJWT(extractToken(r), s.jwtKey)
 	if !ok {
-		writeErr(w, 401, "未授权")
+		writeErr(w, 401, "unauthorized")
 		return
 	}
 	u, err := pg.GetRBACUserByID(claims.Subject)
 	if err != nil {
-		writeErr(w, 401, "用户不存在")
+		writeErr(w, 401, "user not found")
 		return
 	}
 	var req struct {
@@ -282,7 +295,7 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 		NewPassword string `json:"new_password"`
 	}
 	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, "请求格式错误")
+		writeErr(w, 400, "invalid request body")
 		return
 	}
 	if msg := validatePasswordStrength(req.NewPassword); msg != "" {
@@ -291,22 +304,23 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := clientIP(r)
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.OldPassword)); err != nil {
-		pg.RecordAudit(u.Username, "auth", "change_password", "fail", ip, "当前密码错误", nil)
-		writeErr(w, 401, "当前密码错误")
+		pg.RecordAudit(u.Username, "auth", "change_password", "fail", ip, "current password incorrect", nil)
+		writeErr(w, 401, "current password incorrect")
 		return
 	}
 	newHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		writeErr(w, 500, "密码加密失败")
+		writeErr(w, 500, "password hashing failed")
 		return
 	}
-	// UpdateRBACUserPassword 会自增 token_version，作废含本次请求 token 在内的所有旧 token。
+	// UpdateRBACUserPassword bumps token_version, invalidating all older tokens including this request's.
 	if err := pg.UpdateRBACUserPassword(u.ID, string(newHash)); err != nil {
-		writeErr(w, 500, "保存失败: "+err.Error())
+		writeErr(w, 500, "save failed: "+err.Error())
 		return
 	}
-	pg.RecordAudit(u.Username, "auth", "change_password", "success", ip, "修改密码成功", nil)
-	// 用新版本号给调用方补发一张 token，避免「刚改完密码自己就被踢」；其它设备的旧 token 仍失效。
+	pg.RecordAudit(u.Username, "auth", "change_password", "success", ip, "password changed", nil)
+	// Re-issue a token with the new version so the caller isn't logged out right after changing
+	// their password; older tokens on other devices remain invalidated.
 	fresh := ""
 	if nu, e := pg.GetRBACUserByID(u.ID); e == nil && nu != nil {
 		fresh, _ = signJWTTTL(s.jwtKey, nu.ID, nu.Username, nu.TokenVersion, s.sessionTTL())
@@ -314,7 +328,7 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "token": fresh})
 }
 
-// POST /api/auth/login — 校验用户名/密码返回 JWT。
+// POST /api/auth/login — validate credentials and return a JWT.
 func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	pg := s.pg(w)
 	if pg == nil {
@@ -325,66 +339,69 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := decode(r, &req); err != nil {
-		writeErr(w, 400, "请求格式错误")
+		writeErr(w, 400, "invalid request body")
 		return
 	}
 	ip := clientIP(r)
 	uname := strings.TrimSpace(req.Username)
-	// 暴力破解防护：按 IP + 账号双维度检查锁定状态。命中锁定直接 429，不再做任何
-	// 口令比对（bcrypt 本身耗 CPU，先挡在前面同时也缓解了「海量尝试打满 CPU/连接」）。
+	// Brute-force protection: check lockout on both the IP and account dimensions. A lockout
+	// returns 429 immediately, skipping the password comparison (bcrypt is CPU-heavy; blocking
+	// early also keeps a flood of attempts from saturating CPU/connections).
 	if locked, retry := s.loginLimiter.locked(ip, uname); locked {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 		pg.RecordAudit(uname, "auth", "login_locked", "fail", ip,
-			fmt.Sprintf("触发暴力破解锁定，剩余冷却 %ds", int(retry.Seconds())), nil)
-		writeErr(w, 429, fmt.Sprintf("尝试过于频繁，账号/来源已临时锁定，请 %d 秒后再试", int(retry.Seconds())))
+			fmt.Sprintf("brute-force lockout triggered, cooldown %ds left", int(retry.Seconds())), nil)
+		writeErr(w, 429, fmt.Sprintf("too many attempts, account/source temporarily locked, retry in %ds", int(retry.Seconds())))
 		return
 	}
 	u, err := pg.GetRBACUserByUsername(req.Username)
 	if err != nil || u == nil || !u.Enabled {
-		reason := "用户名或密码错误"
+		reason := "invalid username or password"
 		if u != nil && !u.Enabled {
-			reason = "账号已停用"
+			reason = "account disabled"
 		}
 		s.registerLoginFailure(pg, ip, uname)
 		pg.RecordAudit(uname, "auth", "login_failed", "fail", ip, reason, nil)
-		log.Printf("[auth] 登录失败 用户=%q ip=%s 原因=%s", uname, ip, reason)
+		log.Printf("[auth] login failed user=%q ip=%s reason=%s", uname, ip, reason)
 		writeErr(w, 401, reason)
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(req.Password)); err != nil {
 		s.registerLoginFailure(pg, ip, u.Username)
-		pg.RecordAudit(u.Username, "auth", "login_failed", "fail", ip, "密码错误", nil)
-		log.Printf("[auth] 登录失败 用户=%q ip=%s 原因=密码错误", u.Username, ip)
-		writeErr(w, 401, "用户名或密码错误")
+		pg.RecordAudit(u.Username, "auth", "login_failed", "fail", ip, "wrong password", nil)
+		log.Printf("[auth] login failed user=%q ip=%s reason=wrong password", u.Username, ip)
+		writeErr(w, 401, "invalid username or password")
 		return
 	}
 	tok, err := signJWTTTL(s.jwtKey, u.ID, u.Username, u.TokenVersion, s.sessionTTL())
 	if err != nil {
-		writeErr(w, 500, "token 生成失败")
+		writeErr(w, 500, "token generation failed")
 		return
 	}
-	s.loginLimiter.reset(ip, u.Username) // 成功登录清零该 IP+账号的失败计数
-	pg.RecordAudit(u.Username, "auth", "login", "success", ip, "登录成功", nil)
-	log.Printf("[auth] 登录成功 用户=%q ip=%s", u.Username, ip)
+	s.loginLimiter.reset(ip, u.Username) // a successful login clears the failure counts for this IP+account
+	pg.RecordAudit(u.Username, "auth", "login", "success", ip, "login succeeded", nil)
+	log.Printf("[auth] login succeeded user=%q ip=%s", u.Username, ip)
 	writeJSON(w, 200, map[string]any{"token": tok})
 }
 
-// registerLoginFailure 记一次失败到限流器；若恰好触发锁定则写一条审计便于在日志页看到。
+// registerLoginFailure records one failure into the limiter; if it exactly triggers a
+// lockout, an audit entry is written so the event shows up on the log page.
 func (s *Server) registerLoginFailure(pg *db.DB, ip, username string) {
 	if s.loginLimiter.fail(ip, username, s.loginPolicy()) {
-		pg.RecordAudit(username, "auth", "login_locked", "fail", ip, "失败次数超阈值，已临时锁定", nil)
-		log.Printf("[auth] 暴力破解锁定 用户=%q ip=%s", username, ip)
+		pg.RecordAudit(username, "auth", "login_locked", "fail", ip, "failure threshold exceeded, temporarily locked", nil)
+		log.Printf("[auth] brute-force lockout user=%q ip=%s", username, ip)
 	}
 }
 
-// validatePasswordStrength 返回空串=通过，否则=给用户的中文原因。
-// 规则：长度 8–128 位，至少包含两类字符（字母 / 数字 / 符号），且不能是单一重复字符。
+// validatePasswordStrength returns "" on pass, otherwise the reason shown to the user.
+// Rules: length 8-128, at least two character classes (letters / digits / symbols), and
+// not a single repeated character.
 func validatePasswordStrength(pw string) string {
 	if len(pw) < 8 {
-		return "密码至少 8 位"
+		return "password must be at least 8 characters"
 	}
 	if len(pw) > 128 {
-		return "密码过长（最多 128 位）"
+		return "password too long (max 128 characters)"
 	}
 	var hasLetter, hasDigit, hasOther bool
 	allSame := true
@@ -402,7 +419,7 @@ func validatePasswordStrength(pw string) string {
 		}
 	}
 	if allSame {
-		return "密码不能是单一重复字符"
+		return "password must not be a single repeated character"
 	}
 	classes := 0
 	for _, b := range []bool{hasLetter, hasDigit, hasOther} {
@@ -411,12 +428,12 @@ func validatePasswordStrength(pw string) string {
 		}
 	}
 	if classes < 2 {
-		return "密码需至少包含两类字符（字母 / 数字 / 符号）"
+		return "password needs at least two character classes (letters / digits / symbols)"
 	}
 	return ""
 }
 
-// clientIP 提取客户端 IP（优先 X-Forwarded-For / X-Real-IP，回退 RemoteAddr）。
+// clientIP extracts the client IP (X-Forwarded-For / X-Real-IP first, falling back to RemoteAddr).
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if i := strings.IndexByte(xff, ','); i >= 0 {

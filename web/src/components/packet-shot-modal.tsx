@@ -22,8 +22,10 @@ function fmtTime(ts: string) {
   });
 }
 
-// PacketShotModal：全屏「截图模式」——请求+响应一屏、顶部自说明头(方法/状态/目标/URL/时间)，
-// 专为替代 Burp 截图。自行按需加载报文正文。流量页与漏洞详情(关联流量)共用。
+// PacketShotModal: fullscreen "shot mode" — request+response on one screen with a
+// self-describing header (method/status/target/URL/time), built to replace Burp
+// screenshots. Loads the exchange bodies on demand. Shared by the traffic page and
+// finding detail (linked traffic).
 export function PacketShotModal({ exchange, onClose }: { exchange: TrafficExchange; onClose: () => void }) {
   const { t } = useTranslation();
   const [detail, setDetail] = React.useState<TrafficDetail | null>(null);

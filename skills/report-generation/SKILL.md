@@ -1,29 +1,29 @@
 ---
 name: report-generation
-description: 渗透测试报告生成的可编辑内容——AI 改写 prompt 与固定骨架（方法论/测试清单/工具/参考规范/测试人员），按语言分文件。报告引擎每次生成读盘，编辑即时生效。
+description: Editable content for penetration testing report generation—AI rewriting prompts and the fixed skeleton (methodology/testing checklist/tools/reference standards/testers), stored per language in separate files. The report engine reads from disk on every generation, so edits take effect immediately.
 ---
 
-# 报告生成（可编辑内容）
+# Report Generation (Editable Content)
 
-本 skill 存放**渗透测试报告的可编辑内容**，供「报告管理」的生成管线读取。修改后**下次生成即时生效**，无需重启或重新编译；任一文件缺失或损坏会自动回退到内置默认值。
+This skill holds the **editable content of penetration testing reports**, read by the generation pipeline of "Report Management". Changes take effect on the **next generation**—no restart or rebuild needed; if any file is missing or corrupted, the built-in defaults are used as fallback.
 
-## 结构
+## Layout
 
-- `prompts/report-level.tmpl` — 报告级叙述的 AI 提示词（背景 / 服务成果 / 整改结论 / 命中的测试项）。
-- `prompts/vuln-narrative.tmpl` — 单条漏洞改写的 AI 提示词（描述 / 复现过程 / 风险 / 修复 / CVSS）。
-- `skeleton/<语言>/methodology.json` — 2.2 测试流程：`{intro, phases:[{name,desc}]}`。
-- `skeleton/<语言>/checklist.json` — 2.3 测试清单：`[{category,name,desc}]`。AI 判定命中的项渲染为「不通过」。
-- `skeleton/<语言>/tools.json` — 2.4 测试工具：`[{name,desc}]`。
-- `skeleton/<语言>/standards.json` — 2.5 参考规范：`["..."]`。
-- `skeleton/<语言>/personnel.json` — 2.1 测试人员默认值：`[{name,role,contact}]`（用户在报告设置里填了就以其为准）。
+- `prompts/report-level.tmpl` — AI prompt for report-level narrative (background / service results / remediation conclusion / matched checklist items).
+- `prompts/vuln-narrative.tmpl` — AI prompt for rewriting a single vulnerability (description / reproduction steps / risk / remediation / CVSS).
+- `skeleton/<language>/methodology.json` — 2.2 Testing methodology: `{intro, phases:[{name,desc}]}`.
+- `skeleton/<language>/checklist.json` — 2.3 Testing checklist: `[{category,name,desc}]`. Items the AI flags as hit are rendered as "failed".
+- `skeleton/<language>/tools.json` — 2.4 Testing tools: `[{name,desc}]`.
+- `skeleton/<language>/standards.json` — 2.5 Reference standards: `["..."]`.
+- `skeleton/<language>/personnel.json` — 2.1 Tester defaults: `[{name,role,contact}]`(values the user enters in report settings take precedence).
 
-语言目录：`zh-CN`（简体）/ `zh-TW`（繁体）/ `en-US`（英文）。
+Language directories: `zh-CN` (Simplified) / `zh-TW` (Traditional) / `en-US` (English).
 
-## Prompt 模板变量
+## Prompt Template Variables
 
-提示词是 Go `text/template`，用 `===USER===` 分隔 system 与 user 两段：
+The prompts are Go `text/template` files, with `===USER===` separating the system and user sections:
 
-- 报告级：`{{.Company}}` `{{.Project}}` `{{.Client}}` `{{.FindingsList}}` `{{.LangDirective}}`
-- 漏洞级：`{{.Company}}` `{{.VulnClass}}` `{{.Severity}}` `{{.Summary}}` `{{.PoC}}` `{{.LangDirective}}`
+- Report level: `{{.Company}}` `{{.Project}}` `{{.Client}}` `{{.FindingsList}}` `{{.LangDirective}}`
+- Vulnerability level: `{{.Company}}` `{{.VulnClass}}` `{{.Severity}}` `{{.Summary}}` `{{.PoC}}` `{{.LangDirective}}`
 
-`{{.LangDirective}}` 会注入目标语言指令（简/繁/英），故 prompt 本身与语言无关、三语共用一份。
+`{{.LangDirective}}` injects the target-language instruction (Simplified/Traditional/English), so the prompts themselves are language-neutral and shared across all three languages.

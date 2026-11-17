@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-// 漏洞↔流量关联数据层。关联在 PG(此表)，报文元数据在流量库(SQLite，见 traffic 包)。
-// LinkFindingTraffic 可复用：流量页手动关联传 source="manual"；任务引擎挖洞时自动记录传 "auto"。
+// Finding↔traffic association layer. Associations live in PG (this table); packet metadata in the traffic store (SQLite, see package traffic).
+// LinkFindingTraffic is reusable: manual links from the traffic page pass source="manual"; the task engine auto-records while hunting, passing "auto".
 
-// LinkFindingTraffic 把一组流量 exchange 关到某漏洞（幂等，重复关不报错）。
+// LinkFindingTraffic attaches a set of traffic exchanges to a finding (idempotent; duplicate links are a no-op).
 func (d *DB) LinkFindingTraffic(nodeID int64, exchangeIDs []string, source string) error {
 	if nodeID <= 0 || len(exchangeIDs) == 0 {
 		return nil
@@ -34,13 +34,13 @@ func (d *DB) LinkFindingTraffic(nodeID int64, exchangeIDs []string, source strin
 	return tx.Commit()
 }
 
-// UnlinkFindingTraffic 解除某漏洞与某条流量的关联。
+// UnlinkFindingTraffic removes the association between a finding and one traffic exchange.
 func (d *DB) UnlinkFindingTraffic(nodeID int64, exchangeID string) error {
 	_, err := d.Exec(`DELETE FROM finding_traffic WHERE node_id=$1 AND exchange_id=$2`, nodeID, strings.TrimSpace(exchangeID))
 	return err
 }
 
-// ListFindingTrafficIDs 返回某漏洞关联的 exchange id 列表（按关联时间）。
+// ListFindingTrafficIDs returns the exchange ids linked to a finding (by link time).
 func (d *DB) ListFindingTrafficIDs(nodeID int64) ([]string, error) {
 	rows, err := d.Query(`SELECT exchange_id FROM finding_traffic WHERE node_id=$1 ORDER BY created_at, exchange_id`, nodeID)
 	if err != nil {
@@ -58,7 +58,7 @@ func (d *DB) ListFindingTrafficIDs(nodeID int64) ([]string, error) {
 	return out, rows.Err()
 }
 
-// CountFindingTraffic 批量统计一组漏洞各自的关联流量数（发现页列表显示"关联流量 N 条"）。全参数化。
+// CountFindingTraffic counts each finding's linked traffic in batch (the findings list shows "N linked exchanges"). Fully parameterized.
 func (d *DB) CountFindingTraffic(nodeIDs []int64) map[int64]int {
 	out := map[int64]int{}
 	if len(nodeIDs) == 0 {

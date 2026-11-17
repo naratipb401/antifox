@@ -1,15 +1,15 @@
--- AntiFox PostgreSQL schema (单一数据源)
--- 幂等：可重复执行（IF NOT EXISTS / OR REPLACE / DROP TRIGGER IF EXISTS）。
+-- AntiFox PostgreSQL schema (single source of truth)
+-- Idempotent: safe to re-run (IF NOT EXISTS / OR REPLACE / DROP TRIGGER IF EXISTS).
 
 -- =====================================================================
--- 0. 通用：updated_at 触发器
+-- 0. Common: updated_at trigger
 -- =====================================================================
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END;
 $$ LANGUAGE plpgsql;
 
 -- =====================================================================
--- A. 资产层：companies / assets / company_scope
+-- A. Asset layer: companies / assets / company_scope
 -- =====================================================================
 
 CREATE TABLE IF NOT EXISTS companies (
@@ -105,7 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_sv2_net     ON company_scope USING GIST(net inet_
 CREATE INDEX IF NOT EXISTS idx_sv2_company ON company_scope(company_id);
 
 -- =====================================================================
--- B. 推理探索层
+-- B. Reasoning/exploration layer
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS explorations (
     id          BIGSERIAL PRIMARY KEY,
@@ -218,13 +218,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_one_default ON llm_profiles(is_default)
 DROP TRIGGER IF EXISTS trg_llm_upd ON llm_profiles;
 CREATE TRIGGER trg_llm_upd BEFORE UPDATE ON llm_profiles
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
--- LLM 轮询(故障转移)：priority=链序权重(DESC，激活配置永远居首)；pool_exclude=不作为兜底目标。
+-- LLM failover pool: priority = chain-order weight (DESC; the active profile always leads); pool_exclude = never used as a fallback.
 ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS priority     INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS pool_exclude BOOLEAN NOT NULL DEFAULT false;
--- 自定义会话头：非空时每次 LLM 请求带上该 HTTP 头(头值=当前会话 session id)，供按 session
--- 做提示缓存/粘性路由的网关(如 opencode zen)。空=不发送。
+-- Custom session header: when non-empty, every LLM request carries this HTTP header (value = the current session id), for gateways
+-- doing per-session prompt caching/sticky routing (e.g. opencode zen). Empty = not sent.
 ALTER TABLE llm_profiles ADD COLUMN IF NOT EXISTS session_header_key TEXT NOT NULL DEFAULT '';
--- 熔断器状态：进程内为准，落库仅为重启后恢复未过期的冷却窗口。
+-- Circuit-breaker state: in-process is the source of truth; persisted only to restore unexpired cooldown windows after a restart.
 CREATE TABLE IF NOT EXISTS llm_profile_health (
     profile_id BIGINT PRIMARY KEY REFERENCES llm_profiles(id) ON DELETE CASCADE,
     fails      INTEGER NOT NULL DEFAULT 0,
@@ -235,11 +235,11 @@ CREATE TABLE IF NOT EXISTS llm_profile_health (
 );
 
 -- =====================================================================
--- D. 任务层
+-- D. Task layer
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS tasks (
     id             BIGSERIAL PRIMARY KEY,
-    name           TEXT NOT NULL DEFAULT '',   -- 简短任务名/目标(如 官网渗透 / 内网测试);空=回退 #id·描述
+    name           TEXT NOT NULL DEFAULT '',   -- short task name/goal (e.g. portal pentest / internal network test); empty = falls back to #id·description
     description    TEXT NOT NULL,
     goal           TEXT NOT NULL,
     exploration_id BIGINT NOT NULL UNIQUE
@@ -258,9 +258,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';  -- 存量库补列
--- 任务出口代理选择：''=跟随全局(配了全局代理就走) | 'direct'=强制直连 | 'proxy'=走全局代理。
--- 任务运行/激活时据此设 MITM 上游(隐藏源 IP)。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';  -- backfill column for existing databases
+-- Task egress proxy choice: '' = follow global (uses the global proxy if configured) | 'direct' = force direct | 'proxy' = global proxy.
+-- At run/activation time the MITM upstream is set accordingly (hides the source IP).
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS egress TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_tasks_alive  ON tasks(created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)          WHERE deleted_at IS NULL;
@@ -269,7 +269,7 @@ CREATE TRIGGER trg_tasks_upd BEFORE UPDATE ON tasks
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- =====================================================================
--- E. Agents / 提示词模板 / 变量目录
+-- E. Agents / prompt templates / variable catalog
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS agents (
     id                BIGSERIAL PRIMARY KEY,
@@ -307,7 +307,7 @@ CREATE TABLE IF NOT EXISTS agent_prompts (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (agent_id, version)
 );
--- 循环外键：agents.current_prompt_id → agent_prompts.id（需在两表创建后加）
+-- Circular foreign key: agents.current_prompt_id → agent_prompts.id (added after both tables exist)
 DO $$ BEGIN
     ALTER TABLE agents ADD CONSTRAINT fk_agents_curprompt
         FOREIGN KEY (current_prompt_id) REFERENCES agent_prompts(id) ON DELETE SET NULL;
@@ -324,7 +324,7 @@ CREATE TABLE IF NOT EXISTS agent_prompt_vars (
 );
 
 -- =====================================================================
--- F. MCP 服务
+-- F. MCP servers
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id              BIGSERIAL PRIMARY KEY,
@@ -348,9 +348,9 @@ DROP TRIGGER IF EXISTS trg_mcp_upd ON mcp_servers;
 CREATE TRIGGER trg_mcp_upd BEFORE UPDATE ON mcp_servers
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- 默认数据源占位：ScopeSentry 资产同步 MCP（地址与认证均留空、未启用）。
--- 供「资产同步」页检测数据源是否已配置；用户在页面填入 url 与 X-API-Key 后再启用。
--- 仅在缺失时插入，绝不覆盖用户已配置/已启用的服务器（schema.sql 每次启动都会 Exec）。
+-- Default data-source placeholder: ScopeSentry asset-sync MCP (address and credentials empty, disabled).
+-- Lets the asset-sync page detect whether a data source is configured; the user fills in url and X-API-Key on the page, then enables it.
+-- Inserted only when missing; never overwrites a user-configured/enabled server (schema.sql is Exec'd on every startup).
 INSERT INTO mcp_servers (name, transport, url, env, enabled)
 VALUES ('ScopeSentry', 'http', NULL, '{"X-API-Key":""}', false)
 ON CONFLICT (name) DO NOTHING;
@@ -365,8 +365,8 @@ CREATE TABLE IF NOT EXISTS mcp_tools_cache (
     UNIQUE (server_id, tool_name)
 );
 
--- MCP 工具调用统计（可观测性，类比 skill_stats）。每次 MCP tool 被某 agent 执行即 +1，
--- 按 (server_name, tool_name, agent_key) 聚合。用于 MCP 管理页监控面板。
+-- MCP tool call stats (observability, akin to skill_stats). +1 each time an MCP tool is run by some agent,
+-- aggregated by (server_name, tool_name, agent_key). Powers the MCP management monitoring panel.
 CREATE TABLE IF NOT EXISTS mcp_stats (
     server_name TEXT NOT NULL,
     tool_name   TEXT NOT NULL,
@@ -386,7 +386,7 @@ ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS status_at TIMESTAMPTZ;
 ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS status_error TEXT NOT NULL DEFAULT '';
 
 -- =====================================================================
--- G. 可见性：agent × mcp / skill
+-- G. Visibility: agent × mcp / skill
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS agent_visibility (
     agent_id      BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -408,8 +408,8 @@ CREATE TABLE IF NOT EXISTS agent_skill_visibility (
 );
 CREATE INDEX IF NOT EXISTS idx_askv_skill ON agent_skill_visibility(skill_name);
 
--- Skill 调用统计（复用可观测性）：每次 skill 被某 agent 加载即 +1，按 (skill,agent) 聚合。
--- 用于「Skills」页监控面板——哪些 skill 真被复用、频次、由谁、最后何时。
+-- Skill invocation stats (shared observability): +1 each time a skill is loaded by some agent, aggregated by (skill,agent).
+-- Powers the Skills-page monitoring panel — which skills are actually reused, how often, by whom, and when last.
 CREATE TABLE IF NOT EXISTS skill_stats (
     skill_name TEXT NOT NULL,
     agent_key  TEXT NOT NULL DEFAULT '',
@@ -420,7 +420,7 @@ CREATE TABLE IF NOT EXISTS skill_stats (
 CREATE INDEX IF NOT EXISTS idx_skill_stats_name ON skill_stats(skill_name);
 
 -- =====================================================================
--- H. 内置工具目录
+-- H. Builtin tool catalog
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS tools (
     key         TEXT PRIMARY KEY,
@@ -439,7 +439,7 @@ CREATE TRIGGER trg_tools_upd BEFORE UPDATE ON tools
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- =====================================================================
--- I. 会话（对话页）
+-- I. Conversations (chat page)
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS conversations (
     id             BIGSERIAL PRIMARY KEY,
@@ -472,7 +472,7 @@ CREATE TABLE IF NOT EXISTS conversation_activities (
 CREATE INDEX IF NOT EXISTS idx_conv_act ON conversation_activities(conversation_id, id);
 
 -- =====================================================================
--- J. Agent 触发器
+-- J. Agent triggers
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS agent_triggers (
     id                          BIGSERIAL PRIMARY KEY,
@@ -501,7 +501,7 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
 );
 
 -- =====================================================================
--- K. 拦截规则
+-- K. Intercept rules
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS intercept_rules (
     id              BIGSERIAL PRIMARY KEY,
@@ -540,7 +540,7 @@ CREATE INDEX IF NOT EXISTS idx_intercept_pending_status ON intercept_pending(sta
 CREATE INDEX IF NOT EXISTS idx_intercept_pending_task   ON intercept_pending(task_id, created_at DESC);
 
 -- =====================================================================
--- L. 漏洞发现持久化
+-- L. Finding persistence
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS findings (
     id          BIGSERIAL PRIMARY KEY,
@@ -556,12 +556,12 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 CREATE INDEX IF NOT EXISTS idx_findings_task ON findings(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_time ON findings(created_at DESC);
--- 就地记录的结构化复现过程(entry_point/prerequisites/steps[{request,expected,proves}]/provenance)：
--- agent 确认漏洞时在 report_finding 里填,请求逐字取自真实执行→事后富化只写文字、不再大生成重构。
+-- Structured reproduction recorded in place (entry_point/prerequisites/steps[{request,expected,proves}]/provenance):
+-- filled into report_finding when the agent confirms the finding; requests taken verbatim from real execution → post-hoc enrichment only writes prose, no large-scale regeneration.
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS reproduction JSONB;
 
 -- =====================================================================
--- M. 后端日志持久化
+-- M. Backend log persistence
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS server_logs (
     id         BIGSERIAL PRIMARY KEY,
@@ -573,7 +573,7 @@ CREATE TABLE IF NOT EXISTS server_logs (
 CREATE INDEX IF NOT EXISTS idx_server_logs_id ON server_logs(id DESC);
 
 -- =====================================================================
--- N. 多用户 RBAC（AntiFox 平台权限：用户 / 角色 / 权限 / 授权）
+-- N. Multi-user RBAC (AntiFox platform permissions: users / roles / permissions / grants)
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS rbac_users (
     id            TEXT PRIMARY KEY,
@@ -582,11 +582,11 @@ CREATE TABLE IF NOT EXISTS rbac_users (
     password_hash TEXT NOT NULL,
     enabled       BOOLEAN NOT NULL DEFAULT true,
     is_builtin    BOOLEAN NOT NULL DEFAULT false,
-    token_version INT NOT NULL DEFAULT 0,  -- 改密/停用自增；JWT 携带旧版本即失效（强制重新登录）
+    token_version INT NOT NULL DEFAULT 0,  -- bumped on password change/disable; a JWT carrying an older version is invalid (forces re-login)
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-ALTER TABLE rbac_users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0;  -- 存量库补列（幂等）
+ALTER TABLE rbac_users ADD COLUMN IF NOT EXISTS token_version INT NOT NULL DEFAULT 0;  -- backfill column for existing databases (idempotent)
 
 CREATE TABLE IF NOT EXISTS rbac_roles (
     id          TEXT PRIMARY KEY,
@@ -618,12 +618,12 @@ CREATE INDEX IF NOT EXISTS idx_rbac_user_roles_user ON rbac_user_roles(user_id);
 CREATE INDEX IF NOT EXISTS idx_rbac_role_perms_role ON rbac_role_permissions(role_id);
 
 -- =====================================================================
--- O. 审计日志（平台操作/登录审计；后续可扩展成完整审计中心）
+-- O. Audit log (platform-action/login audit; may grow into a full audit center later)
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS audit_logs (
     id         BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    actor      TEXT NOT NULL DEFAULT '',   -- 操作者用户名
+    actor      TEXT NOT NULL DEFAULT '',   -- acting user's name
     category   TEXT NOT NULL DEFAULT '',   -- auth / rbac / task / ...
     action     TEXT NOT NULL DEFAULT '',   -- login / login_failed / create_user / ...
     result     TEXT NOT NULL DEFAULT 'success', -- success / fail
@@ -635,14 +635,14 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_id ON audit_logs(id DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_cat ON audit_logs(category, action);
 
--- §P 漏洞富化：AI 生成/人工编辑的结构化漏洞数据，覆盖在原始 finding 节点之上（不改节点 payload）。
--- 以 exploration 节点 id 为规范键；报告与发现页共用。source: ai | manual。
+-- §P Finding enrichment: AI-generated/manually-edited structured finding data, overlaid on the raw finding node (node payload unchanged).
+-- Keyed by exploration node id; shared by the report and the findings page. source: ai | manual.
 CREATE TABLE IF NOT EXISTS finding_enrichment (
     node_id      BIGINT PRIMARY KEY,
-    name         TEXT NOT NULL DEFAULT '',   -- 润色后的漏洞名称
-    target       TEXT NOT NULL DEFAULT '',   -- 受影响主机 / URL
+    name         TEXT NOT NULL DEFAULT '',   -- polished finding name
+    target       TEXT NOT NULL DEFAULT '',   -- affected host / URL
     module       TEXT NOT NULL DEFAULT '',
-    severity     TEXT NOT NULL DEFAULT '',   -- 人工可覆盖（空=沿用节点）
+    severity     TEXT NOT NULL DEFAULT '',   -- manually overridable (empty = keep the node value)
     status       TEXT NOT NULL DEFAULT 'open', -- open|confirmed|fixed|false_positive|ignored
     cvss_score   REAL NOT NULL DEFAULT 0,
     cvss_vector  TEXT NOT NULL DEFAULT '',
@@ -657,21 +657,21 @@ CREATE TABLE IF NOT EXISTS finding_enrichment (
 );
 CREATE INDEX IF NOT EXISTS idx_finding_enrichment_status ON finding_enrichment(status);
 
--- §P2 漏洞证据截图：按 exploration 节点 id 关联，文件存 dataDir/report_assets/evidence/<node_id>/。
--- 发现页展示 + 报告(DOCX/MD)复现步骤内嵌共用；step_index 对应复现步骤序号(0=概览)。
+-- §P2 Finding evidence screenshots: keyed by exploration node id; files under dataDir/report_assets/evidence/<node_id>/.
+-- Shown on the findings page and embedded in report (DOCX/MD) reproduction steps; step_index matches the reproduction step number (0 = overview).
 CREATE TABLE IF NOT EXISTS finding_evidence (
     id          BIGSERIAL PRIMARY KEY,
     node_id     BIGINT NOT NULL,
-    filename    TEXT NOT NULL,                -- report_assets/evidence/<node_id>/ 下的文件名
-    caption     TEXT NOT NULL DEFAULT '',     -- 图注
-    step_index  INT NOT NULL DEFAULT 0,       -- 对应复现步骤序号(0=未指定/概览)
-    sort_order  INT NOT NULL DEFAULT 0,       -- 展示顺序
+    filename    TEXT NOT NULL,                -- file name under report_assets/evidence/<node_id>/
+    caption     TEXT NOT NULL DEFAULT '',     -- caption
+    step_index  INT NOT NULL DEFAULT 0,       -- matching reproduction step number (0 = unspecified/overview)
+    sort_order  INT NOT NULL DEFAULT 0,       -- display order
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_finding_evidence_node ON finding_evidence(node_id);
 
--- §P3 漏洞↔流量关联：把录制流量(MITM 索引里的某条 exchange)关到某漏洞作证据来源。
--- 报文元数据在流量库(SQLite)、关联在此(PG)；source=manual(流量页手动) | auto(任务引擎挖洞时自动记录)。
+-- §P3 Finding↔traffic association: attaches recorded traffic (an exchange in the MITM index) to a finding as an evidence source.
+-- Packet metadata in the traffic store (SQLite), association here (PG); source=manual (traffic page, manual) | auto (recorded by the task engine while hunting).
 CREATE TABLE IF NOT EXISTS finding_traffic (
     node_id     BIGINT NOT NULL,
     exchange_id TEXT NOT NULL,
@@ -681,12 +681,12 @@ CREATE TABLE IF NOT EXISTS finding_traffic (
 );
 CREATE INDEX IF NOT EXISTS idx_finding_traffic_node ON finding_traffic(node_id);
 
--- §Q 报告管理：组织级报告设置(单例) + 已生成报告清单。
+-- §Q Report management: org-level report settings (singleton) + generated report list.
 CREATE TABLE IF NOT EXISTS report_settings (
     id              INT PRIMARY KEY DEFAULT 1,
-    company_name    TEXT NOT NULL DEFAULT '',   -- 报告出具方(中文)
+    company_name    TEXT NOT NULL DEFAULT '',   -- reporting entity (company name)
     company_name_en TEXT NOT NULL DEFAULT '',
-    logo_path       TEXT NOT NULL DEFAULT '',   -- 相对路径(data/report_assets 下)
+    logo_path       TEXT NOT NULL DEFAULT '',   -- relative path (under data/report_assets)
     personnel_json  JSONB NOT NULL DEFAULT '[]'::jsonb, -- [{name,role,contact}]
     cvss_version    TEXT NOT NULL DEFAULT '3.1',
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -704,8 +704,8 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC);
 
--- 命名报告模版：可保存多份"报告出具方/logo/测试人员/CVSS/默认语言"预设，新建报告时选用。
--- 骨架(方法论/清单/工具/规范)由可编辑 skill 按语言提供，模版不重复存储。
+-- Named report templates: multiple reporting-entity/logo/testers/CVSS/default-language presets, chosen when creating a report.
+-- The skeleton (methodology/checklists/tools/standards) is provided per language by an editable skill; the template does not duplicate it.
 CREATE TABLE IF NOT EXISTS report_templates (
     id              BIGSERIAL PRIMARY KEY,
     name            TEXT NOT NULL DEFAULT '',
@@ -714,19 +714,19 @@ CREATE TABLE IF NOT EXISTS report_templates (
     logo_path       TEXT NOT NULL DEFAULT '',
     personnel_json  JSONB NOT NULL DEFAULT '[]'::jsonb,
     cvss_version    TEXT NOT NULL DEFAULT '3.1',
-    locale          TEXT NOT NULL DEFAULT 'zh-CN',  -- 默认报告语言
+    locale          TEXT NOT NULL DEFAULT 'zh-CN',  -- default report language
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_report_templates_created ON report_templates(created_at DESC);
 
 -- =====================================================================
--- R. 知识库（两层 RAG：全局库 + 任务库）
+-- R. Knowledge base (two-tier RAG: global library + task library)
 -- =====================================================================
--- 文档层：scope=global(平台通用漏洞库/0day/技巧/方法论) | task(某任务的授权书/评分规则/范围/检查项)。
--- 向量分块层 knowledge_chunks（含 pgvector 的 vector 列）由 Go 守卫式创建
--- (ensureKnowledgeVectorSchema)——CREATE EXTENSION vector 需超级用户预建；缺失时
--- 降级为关键词检索、不阻断启动，故不放这份必须成功的 schema 里。
+-- Document layer: scope=global (platform-wide vuln library/0days/techniques/methodology) | task (a task's authorization/score rules/scope/checklists).
+-- The vector chunk layer knowledge_chunks (with a pgvector vector column) is created guardedly from Go
+-- (ensureKnowledgeVectorSchema) — CREATE EXTENSION vector needs superuser prep; when missing it
+-- degrades to keyword search without blocking startup, so it stays out of this must-succeed schema.
 CREATE TABLE IF NOT EXISTS knowledge_docs (
     id         BIGSERIAL PRIMARY KEY,
     scope      TEXT   NOT NULL DEFAULT 'global',           -- global | task
@@ -737,7 +737,7 @@ CREATE TABLE IF NOT EXISTS knowledge_docs (
     source     TEXT   NOT NULL DEFAULT 'manual',           -- manual | upload | migrated
     file_name  TEXT   NOT NULL DEFAULT '',
     bytes      BIGINT NOT NULL DEFAULT 0,
-    indexed    BOOLEAN NOT NULL DEFAULT false,             -- 是否已生成向量分块
+    indexed    BOOLEAN NOT NULL DEFAULT false,             -- whether vector chunks have been generated
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -748,7 +748,7 @@ DROP TRIGGER IF EXISTS trg_knowledge_docs_updated ON knowledge_docs;
 CREATE TRIGGER trg_knowledge_docs_updated BEFORE UPDATE ON knowledge_docs
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- 检索日志（可观测性 / 审计）
+-- Retrieval log (observability / audit)
 CREATE TABLE IF NOT EXISTS knowledge_retrieval_logs (
     id         BIGSERIAL PRIMARY KEY,
     task_id    BIGINT,
@@ -764,10 +764,10 @@ CREATE TABLE IF NOT EXISTS knowledge_retrieval_logs (
 CREATE INDEX IF NOT EXISTS idx_knowledge_logs_created ON knowledge_retrieval_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_knowledge_logs_task ON knowledge_retrieval_logs(task_id);
 
--- embedder 配置（单例）：OpenAI 兼容 embeddings 端点。api_key 不回显给 UI。
+-- Embedder config (singleton): OpenAI-compatible embeddings endpoint. api_key is never echoed to the UI.
 CREATE TABLE IF NOT EXISTS knowledge_config (
     id         INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    enabled    BOOLEAN NOT NULL DEFAULT false,             -- 语义检索开关；关=只用关键词
+    enabled    BOOLEAN NOT NULL DEFAULT false,             -- semantic search switch; off = keyword search only
     base_url   TEXT NOT NULL DEFAULT 'https://open.bigmodel.cn/api/paas/v4',
     model      TEXT NOT NULL DEFAULT 'embedding-3',
     api_key    TEXT NOT NULL DEFAULT '',

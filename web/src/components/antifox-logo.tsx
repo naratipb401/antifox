@@ -1,4 +1,4 @@
-// AntiFox 品牌标志（狐狸盘尾圆徽，透明底 PNG）——由 className 控制尺寸，明暗主题通用。
+// AntiFox brand mark (fox-tail round emblem, transparent PNG) — sized via className; works in light and dark themes.
 export function AntifoxLogo({ className }: { className?: string }) {
   return (
     // eslint-disable-next-line @next/next/no-img-element

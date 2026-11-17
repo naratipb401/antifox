@@ -11,14 +11,17 @@ import (
 	"antifox/engine/llm"
 )
 
-// LLM 轮询(故障转移)服务端接线（移植自 AntiFox 0.3.3，适配 antifox 单二进制）：
-//   - 只有【全局激活配置】这条路径(未 pin、未绑定)才轮询；
-//   - 链序 = 激活配置(永远居首) → 其余按 priority DESC，排除 pool_exclude 的；
-//   - 熔断状态进程级共享(s.llmHealth)，重建 pool 不清空、重启从 PG 恢复未过期窗口。
+// Server-side wiring for the LLM failover rotation (ported from AntiFox 0.3.3,
+// adapted to the single-binary antifox):
+//   - only the [globally active profile] path (not pinned, not bound) rotates;
+//   - chain = active profile (always first), then the rest by priority DESC,
+//     minus the ones excluded via pool_exclude;
+//   - circuit-breaker state is shared process-wide (s.llmHealth): rebuilding the
+//     pool keeps it, and restart restores unexpired windows from PG.
 
 // newLLMHealthRegistry builds the process-wide circuit-breaker registry, mirroring
 // state into PG so a cooling-off window survives a restart. Writes are async and
-// best-effort — the in-memory copy is authoritative.
+// best-effort - the in-memory copy is authoritative.
 func newLLMHealthRegistry(pg *db.DB) *llmpool.Registry {
 	if pg == nil {
 		return llmpool.NewRegistry(nil, nil)
@@ -31,7 +34,7 @@ func newLLMHealthRegistry(pg *db.DB) *llmpool.Registry {
 		}
 		go func() {
 			if err := pg.SaveLLMHealth(h); err != nil {
-				log.Printf("[llmpool] 熔断状态落库失败: %v", err)
+				log.Printf("[llmpool] failed to persist circuit-breaker state: %v", err)
 			}
 		}()
 	}
@@ -44,7 +47,7 @@ func newLLMHealthRegistry(pg *db.DB) *llmpool.Registry {
 				st.OpenUntil = *h.OpenUntil
 			}
 			reg.Restore(h.ProfileID, st)
-			log.Printf("[llmpool] 恢复熔断状态: 配置 #%d 冷却至 %s", h.ProfileID, st.OpenUntil.Format(time.RFC3339))
+			log.Printf("[llmpool] restored circuit-breaker state: profile #%d cooling until %s", h.ProfileID, st.OpenUntil.Format(time.RFC3339))
 		}
 	}
 	return reg
@@ -66,7 +69,7 @@ func (s *Server) poolMember(p *db.LLMProfile, rank int) *llmpool.Member {
 }
 
 // poolChain builds the failover chain. headID/headProv/headCfg describe the member
-// that must lead — the globally active profile — passed in so applyLLM's already-built
+// that must lead - the globally active profile - passed in so applyLLM's already-built
 // provider is reused instead of duplicated. Returns nil when failover is off or the
 // chain has fewer than two usable members (then the caller uses the bare provider —
 // byte-for-byte the old behavior).
@@ -76,7 +79,7 @@ func (s *Server) poolChain(headID int64, headProv llm.Provider, headCfg agent.Co
 	}
 	profs, err := s.m.pg.PoolProfiles()
 	if err != nil {
-		log.Printf("[llmpool] 读取轮询链失败: %v", err)
+		log.Printf("[llmpool] failed to load rotation chain: %v", err)
 		return nil
 	}
 	members := []*llmpool.Member{{
@@ -115,14 +118,14 @@ func (s *Server) poolForActive(activeID int64, prov llm.Provider, cfg agent.Conf
 	for _, m := range pool.Members() {
 		names = append(names, m.Name+"/"+m.Model)
 	}
-	log.Printf("[llmpool] LLM 轮询已启用，链路(%d): %v", len(names), names)
+	log.Printf("[llmpool] LLM rotation enabled, chain(%d): %v", len(names), names)
 	return pool
 }
 
 // poolForBinding wraps a role-bound / task-pinned profile's provider so it ALSO fails
 // over to the chain (bound profile as head) when the pool is on. Off / single usable
 // member → returns the bare provider unchanged (old behavior). This is what lets a
-// planner-strong / worker-weak 分级 role, or a task pinned to one profile, keep running
+// planner-strong / worker-weak tiered role, or a task pinned to one profile, keep running
 // when that profile runs out of credit instead of failing hard.
 func (s *Server) poolForBinding(id int64, prov llm.Provider, cfg agent.Config) llm.Provider {
 	if pool := s.poolChain(id, prov, cfg); pool != nil {
@@ -139,7 +142,7 @@ type LLMPoolMemberStatus struct {
 	Format       string `json:"format"`
 	Priority     int    `json:"priority"`
 	Active       bool   `json:"active"`   // the globally-activated profile
-	Excluded     bool   `json:"excluded"` // pool_exclude — not a failover target
+	Excluded     bool   `json:"excluded"` // pool_exclude - not a failover target
 	State        string `json:"state"`    // "ok" | "degraded" | "tripped"
 	Fails        int    `json:"fails"`
 	Trips        int    `json:"trips"`

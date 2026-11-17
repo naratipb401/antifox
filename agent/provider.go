@@ -1,5 +1,5 @@
 // Package agent wires real LLM-driven planner and work agents (on top of the
-// agent-core SDK) to the dual SQLite graph. See docs/AntiFox-架构设计.md
+// agent-core SDK) to the dual SQLite graph. See docs/AntiFox-architecture.md
 // §4.3 (planner) and §4.4 (work agent).
 //
 // Provider configuration is read from the environment so the system runs with
@@ -39,13 +39,14 @@ type Config struct {
 	// ContextWindowK is the model's context window in K tokens (user-configured),
 	// used to size compaction thresholds. 0 = default; see CompactionWindow.
 	ContextWindowK int
-	// ReasoningEffort selects the thinking mode: "" = 默认(不发送思考参数);
-	// "off" = 关闭(thinking.type=disabled); "low"/"medium"/"high"/"max" = 开启并设强度.
+	// ReasoningEffort selects the thinking mode: "" = default (no thinking params sent);
+	// "off" = disabled (thinking.type=disabled); "low"/"medium"/"high"/"max" = enabled at that strength.
 	// NewProvider derives the provider-specific request fields from it.
 	ReasoningEffort string
-	// SessionHeaderKey, 非空时让每次 LLM 请求带一个自定义 HTTP 头——头名=该值、头值=当前
-	// 会话 session id(从请求 ctx 读，见 transcript.WithSessionID)。供按 session 做提示缓存/
-	// 粘性路由的网关(如 opencode zen)。空=不发送。
+	// SessionHeaderKey, when non-empty, sends a custom HTTP header on every LLM request -- name
+	// = this value, value = the current session id (read from the request ctx, see
+	// transcript.WithSessionID). For gateways doing per-session prompt caching / sticky
+	// routing (e.g. opencode zen). Empty = not sent.
 	SessionHeaderKey string
 }
 
@@ -196,8 +197,8 @@ func (c Config) NewProvider() (llm.Provider, error) {
 	if c.RatePerSecond > 0 || c.RatePerMinute > 0 {
 		lc.RateLimit = &llm.RateLimit{PerSecond: c.RatePerSecond, PerMinute: c.RatePerMinute}
 	}
-	// 自定义会话头：提供自带 HTTP client（含 proxy + 会话头 RoundTripper），引擎此时跳过
-	// 按 lc.Proxy 自建 client，故 proxy 必须由本 client 自己施加。
+	// Custom session header: supply our own HTTP client (proxy + session-header RoundTripper);
+	// the engine then skips building a client from lc.Proxy, so the proxy must be applied here.
 	if hk := strings.TrimSpace(c.SessionHeaderKey); hk != "" {
 		client, err := sessionHeaderClient(c.Proxy, hk)
 		if err != nil {
@@ -258,7 +259,7 @@ func TestConnection(ctx context.Context, c Config) (time.Duration, error) {
 	start := time.Now()
 	_, err = agentcore.Run(ctx, agentcore.Options{
 		Provider:       prov,
-		SystemPrompt:   []string{"你是连接测试。只回复 OK，不要别的。"},
+		SystemPrompt:   []string{"You are a connection test. Reply with OK only, nothing else."},
 		PermissionMode: acperm.ModeBypass,
 		MaxTurns:       1,
 		MaxTokens:      32,

@@ -49,7 +49,7 @@ func (s *Server) pgCreateConversation(w http.ResponseWriter, r *http.Request) {
 	}
 	req.AgentKey = strings.TrimSpace(req.AgentKey)
 	if req.AgentKey == "" {
-		writeErr(w, 400, "agent_key 不能为空")
+		writeErr(w, 400, "agent_key is required")
 		return
 	}
 	a, err := pg.GetAgentByKey(req.AgentKey)
@@ -58,18 +58,18 @@ func (s *Server) pgCreateConversation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a == nil {
-		writeErr(w, 404, "agent 不存在")
+		writeErr(w, 404, "agent not found")
 		return
 	}
 	if req.LLMProfileID != nil {
 		if _, ok := s.loadProfileConfig(*req.LLMProfileID); !ok {
-			writeErr(w, 400, "指定的 LLM 配置不存在或未设置 API Key")
+			writeErr(w, 400, "selected LLM profile missing or has no API key")
 			return
 		}
 	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
-		title = "新对话"
+		title = "New conversation"
 	}
 	c, err := pg.CreateConversation(req.AgentKey, title, req.LLMProfileID)
 	if err != nil {
@@ -93,7 +93,7 @@ func (s *Server) pgUpdateConversation(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.LLMProfileID != nil {
 		if _, ok := s.loadProfileConfig(*req.LLMProfileID); !ok {
-			writeErr(w, 400, "指定的 LLM 配置不存在或未设置 API Key")
+			writeErr(w, 400, "selected LLM profile missing or has no API key")
 			return
 		}
 	}
@@ -139,7 +139,7 @@ func (s *Server) pgRenameConversation(w http.ResponseWriter, r *http.Request) {
 	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
-		writeErr(w, 400, "标题不能为空")
+		writeErr(w, 400, "title is required")
 		return
 	}
 	if err := pg.RenameConversation(c.ID, title); err != nil {
@@ -237,12 +237,12 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	}
 	msg := strings.TrimSpace(req.Message)
 	if msg == "" {
-		writeErr(w, 400, "消息不能为空")
+		writeErr(w, 400, "message is required")
 		return
 	}
 	ca := s.chatAgentRef()
 	if ca == nil {
-		writeErr(w, 503, "LLM 未配置，无法对话")
+		writeErr(w, 503, "LLM not configured, cannot chat")
 		return
 	}
 
@@ -250,7 +250,7 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	s.chatMu.Lock()
 	if s.chatBusy[busyKey] {
 		s.chatMu.Unlock()
-		writeErr(w, 409, "该会话正在处理上一条消息，请稍候")
+		writeErr(w, 409, "conversation is still processing the previous message, try again shortly")
 		return
 	}
 	s.chatBusy[busyKey] = true
@@ -262,7 +262,7 @@ func (s *Server) pgSendConversationMessage(w http.ResponseWriter, r *http.Reques
 	if _, err := pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "user", Summary: firstLine(msg, 200), Detail: msg}); err != nil {
 		log.Printf("[conv %d] append user msg failed: %v", c.ID, err)
 	}
-	if c.Title == "" || c.Title == "新对话" {
+	if c.Title == "" || c.Title == "New conversation" {
 		_ = pg.RenameConversation(c.ID, firstLine(msg, 40))
 	}
 	_ = pg.TouchConversation(c.ID)
@@ -319,11 +319,11 @@ func (s *Server) runConversationSync(c *db.Conversation, msg, busyKey string) {
 			log.Printf("[conv %d] append activity failed: %v", c.ID, err)
 		}
 	}
-	// On a manual stop ctx is cancelled; Chat already emits a clean "已手动停止"
+	// On a manual stop ctx is cancelled; Chat already emits a clean "manually stopped"
 	// step, so skip the raw-error entry — only surface genuine failures.
 	if _, err := ca.Chat(ctx, c.AgentKey, sessionID, msg, maxTurns, maxDuration, webSearch, emit); err != nil && ctx.Err() == nil {
 		_, _ = pg.AppendConvActivity(c.ID, db.Activity{Worker: c.AgentKey, Kind: "text", IsError: true,
-			Summary: "（出错：" + err.Error() + "）", Detail: err.Error()})
+			Summary: "(error: " + err.Error() + ")", Detail: err.Error()})
 	}
 	_ = pg.TouchConversation(c.ID)
 }
@@ -399,13 +399,13 @@ func mergeTriggeredRuns(items []triggeredRun) triggeredRun {
 	}
 	first := items[0]
 	var b strings.Builder
-	fmt.Fprintf(&b, "【本会话合并了任务 #%d 的 %d 条触发事件，请一并处理】\n", first.taskID, len(items))
+	fmt.Fprintf(&b, "[This conversation merges %d trigger events from task #%d; handle them together]\n", len(items), first.taskID)
 	for i, it := range items {
-		fmt.Fprintf(&b, "\n── 触发 %d ──\n%s\n", i+1, it.message)
+		fmt.Fprintf(&b, "\n-- trigger %d --\n%s\n", i+1, it.message)
 	}
 	return triggeredRun{
 		agentKey:  first.agentKey,
-		title:     fmt.Sprintf("合并触发 · task#%d · %d 条", first.taskID, len(items)),
+		title:     fmt.Sprintf("merged triggers - task#%d - %d items", first.taskID, len(items)),
 		message:   b.String(),
 		taskID:    first.taskID,
 		mergeable: true,

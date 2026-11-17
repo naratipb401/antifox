@@ -39,21 +39,21 @@ import type {
 } from "@/lib/types";
 
 // statusIcon maps a session status to its icon. Worker terminal states are
-// distinct & color-coded: 完成(绿勾圈) / 取消停止(琥珀斜杠圈) / 出错(红叉圈) /
-// 步数耗尽(紫). running=蓝色转圈, pending(待领取)=灰时钟.
+// distinct & color-coded: done (green check ring) / stopped (amber slash ring) /
+// error (red x ring) / exhausted (purple). running=blue spinner, pending (claimable)=gray clock.
 function statusIcon(status: SessionStatus) {
   switch (status) {
-    case "running": // 执行中
+    case "running": // running
       return <Loader2Icon className="size-3.5 animate-spin text-blue-500" />;
-    case "pending": // 待领取(open intent)
+    case "pending": // claimable (open intent)
       return <ClockIcon className="size-3.5 text-muted-foreground" />;
-    case "done": // 完成
+    case "done": // done
       return <CircleCheckIcon className="size-3.5 text-emerald-500" />;
-    case "stopped": // 取消/停止(被 planner 终止)
+    case "stopped": // cancelled/stopped (terminated by the planner)
       return <CircleSlashIcon className="size-3.5 text-amber-500" />;
-    case "blocked": // 出错
+    case "blocked": // errored
       return <CircleXIcon className="size-3.5 text-red-500" />;
-    case "exhausted": // 步数耗尽(撞 max_turns)
+    case "exhausted": // out of turns (hit max_turns)
       return <ZapOffIcon className="size-3.5 text-violet-500" />;
   }
 }
@@ -76,8 +76,8 @@ function fmtDuration(ms: number): string {
 }
 
 const roleMeta = {
-  mainagent: { label: "主 Agent", icon: UserIcon },
-  planner: { label: "规划 Planner", icon: BrainIcon },
+  mainagent: { label: "Main Agent", icon: UserIcon },
+  planner: { label: "Planner", icon: BrainIcon },
   worker: { label: "Workers", icon: RadioIcon },
 } as const;
 
@@ -88,7 +88,7 @@ const MAIN_ID = "s-main";
 const MAIN_SESSION: Session = {
   id: MAIN_ID,
   role: "mainagent",
-  title: "主 Agent · 编排会话",
+  title: "Main Agent · orchestration session",
   status: "running",
   live: true,
   last_activity: "",
@@ -102,7 +102,7 @@ const PLANNER_ID = "s-planner";
 const PLANNER_SESSION: Session = {
   id: PLANNER_ID,
   role: "planner",
-  title: "规划 Planner · 态势研判",
+  title: "Planner · situation review",
   status: "running",
   live: true,
   last_activity: "",
@@ -119,7 +119,7 @@ function intentStatus(state: string): SessionStatus {
       return "exhausted";
     case "stopped":
       return "stopped";
-    case "open": // 待领取，区别于执行中
+    case "open": // claimable, distinct from running
       return "pending";
     default: // running
       return "running";
@@ -183,7 +183,7 @@ function SessionItem({
       {s.live && (
         <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
           <span className="size-1 animate-pulse rounded-full bg-blue-500" />
-          实时
+          Live
         </span>
       )}
     </button>
@@ -266,7 +266,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
   React.useEffect(() => {
     setAllActivity([]);
     setLoaded(false);
-    // Mock demo：无 SSE 后端，一次性拉取活动快照（执行过程）。
+    // Mock demo: no SSE backend; fetch the activity snapshot (execution trace) once.
     if (MOCK) {
       api
         .activity(taskId)
@@ -542,7 +542,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             worker: "mainagent",
             ts: new Date().toISOString(),
             kind: "text",
-            summary: "（发送失败，请稍后重试）",
+            summary: "(Send failed; please retry)",
           },
         ]);
       })
@@ -555,13 +555,13 @@ export function SessionsTab({ taskId }: { taskId: string }) {
       {/* Left: session list */}
       <div className="flex flex-col overflow-hidden rounded-lg border bg-card">
         <div className="border-b px-3 py-2">
-          <div className="text-xs font-medium text-muted-foreground">会话列表</div>
+          <div className="text-xs font-medium text-muted-foreground">Sessions</div>
           {taskTokens && (
             <div
               className="mt-1 text-[11px] tabular-nums text-muted-foreground"
-              title="整个任务所有 agent 的 token 合计"
+              title="Tokens across every agent in this task"
             >
-              任务总计 · input {fmtTokens(taskTokens.input_tokens)} · cache{" "}
+              Task total · input {fmtTokens(taskTokens.input_tokens)} · cache{" "}
               {fmtTokens(taskTokens.cache_read_tokens)} · output {fmtTokens(taskTokens.output_tokens)}
             </div>
           )}
@@ -596,7 +596,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             })}
             {loaded && !workerSessions.length && (
               <div className="px-2 py-1 text-xs text-muted-foreground">
-                暂无运行中的 Worker 会话。
+                No running worker sessions.
               </div>
             )}
           </div>
@@ -611,7 +611,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             const meta = isWorker ? sessionMeta.get(active.id) : undefined;
             // Worker: the intent moved into the transcript as a message, so the
             // header shows a stable generic label (intent JSON stays on hover).
-            const title = isWorker ? "Worker 执行会话" : active.title;
+            const title = isWorker ? "Worker run" : active.title;
             const titleEl = <span className="text-sm font-medium">{title}</span>;
             return meta?.json ? (
               <Tooltip>
@@ -627,7 +627,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
           {active.live && (
             <span className="inline-flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
               <span className="size-1 animate-pulse rounded-full bg-blue-500" />
-              实时
+              Live
             </span>
           )}
           <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
@@ -639,13 +639,13 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             {runDuration != null && (
               <span
                 className="inline-flex items-center gap-1"
-                title="运行时长（首步 → 末步）"
+                title="Run duration (first → last step)"
               >
                 <ClockIcon className="size-3" />
                 {fmtDuration(runDuration)}
               </span>
             )}
-            {isMain && <span>可交互</span>}
+            {isMain && <span>Interactive</span>}
           </div>
         </div>
         {/* Force Radix's internal viewport wrapper (display:table, sizes to content)
@@ -660,15 +660,15 @@ export function SessionsTab({ taskId }: { taskId: string }) {
             {!loaded ? (
               <div className="flex items-center gap-2 pl-9 text-xs text-muted-foreground">
                 <Loader2Icon className="size-3.5 animate-spin" />
-                加载活动流…
+                Loading activity…
               </div>
             ) : activity.length ? (
               <Transcript activity={activity} live={active.live} taskId={taskId} chat={isMain} />
             ) : (
               <div className="pl-9 text-xs text-muted-foreground">
                 {isMain
-                  ? "还没有对话。在下方给主 Agent 发消息，引导探索方向或介入流程。"
-                  : "暂无活动记录。"}
+                  ? "No conversation yet. Message the main agent below to steer the exploration or step in."
+                  : "No activity yet."}
               </div>
             )}
           </div>
@@ -676,7 +676,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
         {isMain ? (
           <div className="flex items-center gap-2 border-t p-3">
             <Input
-              placeholder="给主 Agent 发消息，引导探索方向…"
+              placeholder="Message the main agent to steer the exploration…"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -685,7 +685,7 @@ export function SessionsTab({ taskId }: { taskId: string }) {
               disabled={mainLive}
             />
             {mainLive ? (
-              <Button size="icon" variant="destructive" onClick={stop} disabled={stopping} title="停止当前执行">
+              <Button size="icon" variant="destructive" onClick={stop} disabled={stopping} title="Stop the current run">
                 {stopping ? <Loader2Icon className="animate-spin" /> : <SquareIcon />}
               </Button>
             ) : (

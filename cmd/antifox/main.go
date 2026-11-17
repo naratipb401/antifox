@@ -36,8 +36,8 @@ const banner = `
 // printBanner writes the startup banner + version/runtime info to stdout.
 func printBanner(addr string) {
 	fmt.Print(banner)
-	fmt.Println("  AI 自主渗透测试系统")
-	fmt.Printf("  版本 %s  ·  %s/%s  ·  %s  ·  监听 %s\n\n",
+	fmt.Println("  AI autonomous pentest system")
+	fmt.Printf("  version %s  ·  %s/%s  ·  %s  · listening on %s\n\n",
 		version, runtime.GOOS, runtime.GOARCH, runtime.Version(), addr)
 }
 
@@ -76,16 +76,16 @@ func run() int {
 		cfgPath = abs
 	}
 	if _, e := os.Stat(cfgPath); e == nil {
-		log.Printf("[config] 配置文件: %s", cfgPath)
+		log.Printf("[config] config file: %s", cfgPath)
 	} else {
-		log.Printf("[config] 配置文件: %s (不存在 — 将仅尝试环境变量 ANTIFOX_PG_DSN)", cfgPath)
+		log.Printf("[config] config file: %s (missing — will try env ANTIFOX_PG_DSN only)", cfgPath)
 	}
 
-	// 数据目录持久化守卫：dataDir 落在 /tmp 或系统临时目录时，重启即清空——流量/报告/转录
-	// 全部静默丢失。DB 另存(持久)，但文件数据必须在持久卷上。大声告警，避免把工作数据放临时目录。
+	// Data-dir persistence guard: when dataDir lands in /tmp or a system temp dir, a restart wipes it —
+	// traffic/reports/transcripts all silently lost. The DB lives elsewhere (persistent), but file data must be on a persistent volume. Warn loudly.
 	if abs, _ := filepath.Abs(*dataDir); abs != "" {
 		if abs == "/tmp" || strings.HasPrefix(abs, "/tmp/") || strings.HasPrefix(abs, os.TempDir()) {
-			log.Printf("⚠️  [data] dataDir=%s 位于临时目录，重启即清空(流量/报告/转录会全部丢失)！请用 -data 指向持久目录，如 ~/antifox-data 或 /opt/antifox/data。", abs)
+			log.Printf("⚠️  [data] dataDir=%s is in a temp dir and will be wiped on restart (traffic/reports/transcripts all lost)! Use -data to point to a persistent dir, e.g. ~/antifox-data or /opt/antifox/data.", abs)
 		}
 	}
 
@@ -105,7 +105,7 @@ func run() int {
 	if abs, err := filepath.Abs(skillDir); err == nil {
 		skillDir = abs
 	}
-	log.Printf("[config] skill 目录: %s", skillDir)
+	log.Printf("[config] skill dir: %s", skillDir)
 	srv := server.New(ctx, mgr, skillDir, *dataDir)
 	httpSrv := &http.Server{
 		Addr:              *addr,
